@@ -1,0 +1,13 @@
+{
+    "client_name": "example_name",
+    "client_email": "example@email.com",
+    "client_mobile": "1234567890",
+    "selected_broker": "ANGEL_ONE",
+    "credentials": {
+        "api_key": "YOUR_API_KEY",
+        "client_code": "YOUR_CLIENT_CODE",
+        "password": "YOUR_PASSWORD"
+    },
+    "mode": "REAL",
+    "registered_at": ""
+}

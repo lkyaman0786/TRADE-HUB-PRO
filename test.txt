@@ -1,0 +1,2180 @@
+import os
+import sys
+import time
+import json
+import pyotp
+import re
+import datetime
+from datetime import datetime, date
+import threading
+import webbrowser
+from flask import Flask, jsonify, request, send_from_directory
+import requests
+
+# Monkey patch requests to prevent any infinite hangs in external libraries
+_original_send = requests.Session.send
+def _patched_send(self, request, **kwargs):
+    if 'timeout' not in kwargs or kwargs['timeout'] is None:
+        kwargs['timeout'] = 6.0
+    return _original_send(self, request, **kwargs)
+requests.Session.send = _patched_send
+
+# Import SmartApi from AngelOne
+try:
+    from SmartApi import SmartConnect
+except ImportError:
+    print("[ERROR] SmartApi module not found! Please run 'pip install smartapi-python'")
+    sys.exit(1)
+
+# Import Fyers API v3 (optional - only required if user selects Fyers broker)
+try:
+    from fyers_apiv3 import fyersModel as FyersModel
+    FYERS_AVAILABLE = True
+except ImportError:
+    FYERS_AVAILABLE = False
+    print("[WARNING] fyers-apiv3 not installed. Fyers broker will not be available.")
+
+# Import KiteConnect for Zerodha (optional)
+try:
+    from kiteconnect import KiteConnect
+    ZERODHA_AVAILABLE = True
+except ImportError:
+    ZERODHA_AVAILABLE = False
+    print("[WARNING] kiteconnect not installed. Zerodha broker will not be available.")
+
+# ==========================================
+# 1. CORE CONFIGURATION & PERSISTENCE
+# ==========================================
+STRATEGIES_FILE = "strategies.json"
+TOKENS_FILE = "tokens.json"
+CLIENT_CONFIG_FILE = "client_config.json"
+
+# Thread safety locks
+state_lock = threading.RLock()
+
+# App State Globals
+active_strategies = {}
+app_logs = []
+lookup_engine = None
+unified_broker = None  # Instantiated dynamically below
+engine_running = False
+
+def log_message(level, message):
+    """
+    Appends a log message with level and timestamp, both printing to terminal
+    and feeding the web UI console.
+    """
+    ts = datetime.now().strftime("%H:%M:%S")
+    full_msg = f"[{ts}] [{level}] {message}"
+    print(full_msg)
+    
+    with state_lock:
+        app_logs.append(full_msg)
+        if len(app_logs) > 300:
+            app_logs.pop(0)
+
+# ==========================================
+# 2. SCRIP MASTER LOOKUP ENGINE
+# ==========================================
+def download_scrip_master(filename="OpenAPIScripMaster.json"):
+    url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+    log_message("INFO", "Downloading latest Scrip Master from Angel One...")
+    try:
+        import urllib.request
+        urllib.request.urlretrieve(url, filename)
+        log_message("SUCCESS", "Scrip Master downloaded successfully!")
+        return True
+    except Exception as e:
+        log_message("ERROR", f"Failed to download Scrip Master: {e}")
+        return False
+
+class ScripMasterLookup:
+    def __init__(self, filename="OpenAPIScripMaster.json"):
+        self.filename = filename
+        self.index = {}
+        self.sorted_nfo_expiries = []
+        self.sorted_mcx_expiries = []
+        self.nfo_symbols = []
+        self.mcx_symbols = []
+        self.load_and_index()
+        
+    def load_and_index(self):
+        download_needed = False
+        if not os.path.exists(self.filename):
+            download_needed = True
+        else:
+            file_time = os.path.getmtime(self.filename)
+            # 24 hours = 86400 seconds
+            if time.time() - file_time > 86400:
+                download_needed = True
+                
+        if download_needed:
+            download_scrip_master(self.filename)
+            
+        log_message("INFO", f"Loading Scrip Master file '{self.filename}'...")
+        t0 = time.time()
+        if not os.path.exists(self.filename):
+            log_message("CRITICAL", f"Scrip Master file '{self.filename}' not found! Please place it in the same directory.")
+            # We don't crash, but wait for it.
+            return
+            
+        try:
+            with open(self.filename, 'r') as f:
+                data = json.load(f)
+            log_message("SUCCESS", f"Loaded {len(data)} scrips in {time.time()-t0:.2f} seconds. Building index...")
+            
+            t1 = time.time()
+            nfo_expiries_set = set()
+            mcx_expiries_set = set()
+            nfo_symbols_set = set()
+            mcx_symbols_set = set()
+            for x in data:
+                if x.get('exch_seg') in ('NFO', 'MCX') and x.get('symbol', '').endswith(('CE', 'PE')):
+                    name = x['name'].upper()
+                    expiry = x['expiry'].upper()
+                    try:
+                        strike = int(round(float(x['strike']) / 100.0))
+                    except Exception:
+                        continue
+                    opt_type = x['symbol'][-2:].upper()
+                    exch_seg = x.get('exch_seg')
+                    
+                    self.index[(name, expiry, strike, opt_type)] = {
+                        'token': x['token'],
+                        'symbol': x['symbol'],
+                        'lotsize': int(x['lotsize']),
+                        'exch_seg': exch_seg
+                    }
+                    if expiry:
+                        if exch_seg == 'NFO':
+                            nfo_symbols_set.add(name)
+                            if name in ('NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'):
+                                nfo_expiries_set.add(expiry)
+                        elif exch_seg == 'MCX':
+                            mcx_symbols_set.add(name)
+                            if name in ('GOLD', 'SILVER', 'CRUDEOIL', 'NATURALGAS', 'GOLDM', 'SILVERM', 'CRUDEOILM', 'NATGASMINI'):
+                                mcx_expiries_set.add(expiry)
+                        
+            # Sort NFO expiries chronologically
+            parsed_nfo_dates = []
+            for exp in nfo_expiries_set:
+                try:
+                    dt = datetime.strptime(exp, "%d%b%Y").date()
+                    if dt >= date.today():
+                        parsed_nfo_dates.append((dt, exp))
+                except Exception:
+                    continue
+            parsed_nfo_dates.sort(key=lambda item: item[0])
+            
+            # Format sorted NFO expiries for the dropdowns (e.g. 25-Jun-2026)
+            self.sorted_nfo_expiries = []
+            for item in parsed_nfo_dates[:35]:
+                dt, exp = item
+                self.sorted_nfo_expiries.append(dt.strftime("%d-%b-%Y"))
+    
+            # Sort MCX expiries chronologically
+            parsed_mcx_dates = []
+            for exp in mcx_expiries_set:
+                try:
+                    dt = datetime.strptime(exp, "%d%b%Y").date()
+                    if dt >= date.today():
+                        parsed_mcx_dates.append((dt, exp))
+                except Exception:
+                    continue
+            parsed_mcx_dates.sort(key=lambda item: item[0])
+            
+            # Format sorted MCX expiries for the dropdowns (e.g. 16-Jun-2026)
+            self.sorted_mcx_expiries = []
+            for item in parsed_mcx_dates[:35]:
+                dt, exp = item
+                self.sorted_mcx_expiries.append(dt.strftime("%d-%b-%Y"))
+                
+            self.nfo_symbols = sorted(list(nfo_symbols_set))
+            self.mcx_symbols = sorted(list(mcx_symbols_set))
+    
+            log_message("SUCCESS", f"Indexed {len(self.index)} contracts in {time.time()-t1:.2f} seconds.")
+            log_message("INFO", f"Loaded {len(self.sorted_nfo_expiries)} NFO expiries and {len(self.sorted_mcx_expiries)} MCX expiries dynamically.")
+            log_message("INFO", f"Gathered {len(self.nfo_symbols)} NFO symbols and {len(self.mcx_symbols)} MCX symbols successfully.")
+        except Exception as e:
+            log_message("ERROR", f"Exception reading Scrip Master: {e}")
+
+    def lookup(self, name, expiry, strike, opt_type):
+        if not name or not expiry or strike is None or not opt_type:
+            return None
+        name = str(name).strip().upper()
+        expiry = str(expiry).strip().upper()
+        try:
+            strike = int(round(float(strike)))
+        except Exception:
+            return None
+        opt_type = str(opt_type).strip().upper()
+        return self.index.get((name, expiry, strike, opt_type))
+
+# ==========================================
+# 3. SELF-HEALING LOGIN & AUTHENTICATION
+# ==========================================
+# ==========================================
+# 3. SAAS CLIENT CONFIGURATION HELPERS
+# ==========================================
+def load_client_config():
+    if os.path.exists(CLIENT_CONFIG_FILE):
+        try:
+            with open(CLIENT_CONFIG_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            log_message("ERROR", f"Failed to load client config: {e}")
+    return None
+
+def save_client_config(config_data):
+    try:
+        with open(CLIENT_CONFIG_FILE, "w") as f:
+            json.dump(config_data, f, indent=4)
+        return True
+    except Exception as e:
+        log_message("ERROR", f"Failed to save client config: {e}")
+        return False
+
+# NOTE: Yahoo Finance fetch removed by design. All rates must come from the connected broker API.
+
+# ==========================================
+# 3b. UNIFIED MULTI-BROKER CLIENT INTERFACE
+# ==========================================
+class UnifiedBrokerClient:
+    def __init__(self):
+        self.broker = "NONE"
+        self.connected = False
+        self.profile = {"name": "Not Logged In", "client_code": "----", "broker": "NONE"}
+        self.client_obj = None
+        self.mode = "REAL"
+        # Zerodha-specific kite object (separate from client_obj which holds raw session)
+        self._kite_obj = None
+
+    def connect(self, config):
+        if not config:
+            self.connected = False
+            return False
+
+        self.broker = config.get("selected_broker", "ANGEL_ONE").upper().strip()
+        creds = config.get("credentials", {})
+
+        if self.broker == "ANGEL_ONE":
+            return self._connect_angel_one(config, creds)
+        elif self.broker == "ZERODHA":
+            return self._connect_zerodha(config, creds)
+        elif self.broker == "FYERS":
+            return self._connect_fyers(config, creds)
+        elif self.broker == "GROWW":
+            return self._connect_groww(config, creds)
+        return False
+
+    def _connect_angel_one(self, config, creds):
+        api_key = creds.get("api_key", "").strip()
+        username = creds.get("client_code", "").strip()
+        pwd = creds.get("password", "").strip()
+        totp_seed = creds.get("totp_seed", "").strip()
+        entered_otp = creds.pop("entered_otp", "").strip()
+        
+        if not api_key or not username or not pwd:
+            log_message("ERROR", "Angel One credentials missing required fields.")
+            self.profile["error_details"] = "API Key, Client Code, and MPIN are required."
+            return False
+
+        obj = SmartConnect(api_key=api_key)
+        
+        # Check tokens.json for active cached session (only if no new OTP entered)
+        if not entered_otp and os.path.exists(TOKENS_FILE):
+            try:
+                with open(TOKENS_FILE, "r") as f:
+                    tokens = json.load(f)
+                
+                raw_jwt = tokens["jwtToken"].replace("Bearer ", "")
+                obj.setAccessToken(raw_jwt)
+                obj.setRefreshToken(tokens["refreshToken"])
+                if tokens.get("feedToken"):
+                    obj.setFeedToken(tokens["feedToken"])
+                
+                profile = obj.getProfile(raw_jwt)
+                if profile and profile.get("status") is True:
+                    log_message("SUCCESS", f"Resumed Angel One session for {profile['data']['name']} ({profile['data']['clientcode']})")
+                    self.profile = {
+                        "name": profile['data']['name'],
+                        "client_code": profile['data']['clientcode'],
+                        "broker": "Angel One"
+                    }
+                    self.connected = True
+                    self.mode = "REAL"
+                    self.client_obj = obj
+                    return True
+                else:
+                    log_message("WARNING", "Cached Angel One tokens expired. Authenticating...")
+            except Exception as e:
+                log_message("WARNING", f"Error reading tokens.json: {e}")
+                
+        try:
+            log_message("INFO", "Logging in to Angel One using OTP code...")
+            
+            # If the user entered a dynamic 6-digit OTP code in Step 4, use it directly!
+            if entered_otp and len(entered_otp) == 6 and entered_otp.isdigit():
+                totp_now = entered_otp
+                log_message("INFO", f"Using entered dynamic OTP/2FA code: {totp_now}")
+            elif totp_seed:
+                # Generate from saved TOTP seed if present (for background auto-reconnects)
+                totp_now = pyotp.TOTP(totp_seed).now()
+            else:
+                log_message("ERROR", "No active OTP/2FA PIN or TOTP seed provided.")
+                self.profile["error_details"] = "Please enter a valid 6-digit OTP/2FA code from your Authenticator app."
+                return False
+                
+            data = obj.generateSession(username, pwd, totp_now)
+            
+            if data and data.get("status"):
+                log_message("SUCCESS", "Angel One Connection Successful!")
+                tokens = {
+                    "jwtToken": data['data']['jwtToken'],
+                    "refreshToken": data['data']['refreshToken'],
+                    "feedToken": data['data'].get('feedToken') or obj.getfeedToken()
+                }
+                with open(TOKENS_FILE, "w") as f:
+                    json.dump(tokens, f, indent=4)
+                    
+                raw_jwt = tokens["jwtToken"].replace("Bearer ", "")
+                obj.setAccessToken(raw_jwt)
+                obj.setRefreshToken(tokens["refreshToken"])
+                
+                profile = obj.getProfile(raw_jwt)
+                name = profile['data']['name'] if (profile and profile.get("status") is True) else config.get("client_name", "Demo User")
+                self.profile = {
+                    "name": name,
+                    "client_code": username,
+                    "broker": "Angel One"
+                }
+                self.connected = True
+                self.mode = "REAL"
+                self.client_obj = obj
+                return True
+            else:
+                err_msg = data.get("message", "Invalid API Key, MPIN or OTP/2FA PIN.")
+                log_message("ERROR", f"Angel One API Handshake failed: {data}")
+                self.profile["error_details"] = err_msg
+                self.connected = False
+                return False
+        except Exception as e:
+            err_msg = str(e)
+            log_message("ERROR", f"Exception during Angel One Authentication: {err_msg}")
+            self.profile["error_details"] = err_msg
+            self.connected = False
+            return False
+
+    def _connect_zerodha(self, config, creds):
+        """Real Zerodha Kite authentication using requests-based browser simulation."""
+        if not ZERODHA_AVAILABLE:
+            self.profile["error_details"] = "kiteconnect library is not installed. Run: pip install kiteconnect"
+            return False
+
+        api_key = creds.get("api_key", "").strip()
+        user_id = creds.get("client_code", "").strip().upper()
+        password = creds.get("password", "").strip()
+        entered_otp = creds.pop("entered_otp", "").strip()   # TOTP from Step 4
+        # Also accept a pre-stored access_token for session resumption
+        stored_access_token = creds.get("zerodha_access_token", "").strip()
+
+        if not api_key or not user_id or not password:
+            log_message("ERROR", "Zerodha connection failed: API Key, User ID, and Password are required.")
+            self.profile["error_details"] = "Kite API Key, User ID, and Password are all required."
+            return False
+
+        # Try restoring from stored access token first
+        if stored_access_token and not entered_otp:
+            try:
+                kite = KiteConnect(api_key=api_key)
+                kite.set_access_token(stored_access_token)
+                profile = kite.profile()
+                if profile and profile.get("user_id"):
+                    log_message("SUCCESS", f"Resumed Zerodha session for {profile['user_name']} ({profile['user_id']})")
+                    self.profile = {
+                        "name": profile["user_name"],
+                        "client_code": profile["user_id"],
+                        "broker": "Zerodha Kite"
+                    }
+                    self.connected = True
+                    self.mode = "REAL"
+                    self._kite_obj = kite
+                    self.client_obj = kite
+                    return True
+            except Exception as e:
+                log_message("WARNING", f"Stored Zerodha token invalid, re-authenticating: {e}")
+
+        if not entered_otp:
+            self.profile["error_details"] = "Please enter your TOTP code from your authenticator app."
+            return False
+
+        try:
+            log_message("INFO", f"Authenticating Zerodha user {user_id}...")
+            sess = requests.Session()
+            sess.headers.update({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded"
+            })
+
+            # Step 1: Submit user_id + password
+            r1 = sess.post(
+                "https://kite.zerodha.com/api/login",
+                data={"user_id": user_id, "password": password},
+                timeout=10
+            )
+            d1 = r1.json()
+            if d1.get("status") != "success":
+                err = d1.get("message") or d1.get("error") or "Invalid User ID or Password."
+                log_message("ERROR", f"Zerodha Step 1 failed: {err}")
+                self.profile["error_details"] = f"Login failed: {err}"
+                return False
+
+            request_id = d1["data"]["request_id"]
+            log_message("INFO", "Zerodha Step 1 OK. Submitting TOTP...")
+
+            # Step 2: Submit TOTP
+            r2 = sess.post(
+                "https://kite.zerodha.com/api/twofa",
+                data={
+                    "user_id": user_id,
+                    "request_id": request_id,
+                    "twofa_value": entered_otp,
+                    "twofa_type": "totp",
+                    "skip_totp": "false"
+                },
+                timeout=10
+            )
+            d2 = r2.json()
+            if d2.get("status") != "success":
+                err = d2.get("message") or d2.get("error") or "Invalid TOTP code."
+                log_message("ERROR", f"Zerodha TOTP verification failed: {err}")
+                self.profile["error_details"] = f"TOTP verification failed: {err}"
+                return False
+
+            log_message("INFO", "Zerodha TOTP OK. Requesting KiteConnect session token...")
+
+            # Step 3: Get the kite_enctoken from session cookie
+            enctoken = None
+            for cookie in sess.cookies:
+                if cookie.name == "enctoken":
+                    enctoken = cookie.value
+                    break
+
+            if not enctoken:
+                # Try alternate: get enctoken from response body
+                enctoken = d2.get("data", {}).get("enctoken") or d2.get("data", {}).get("access_token")
+
+            if not enctoken:
+                self.profile["error_details"] = "Authentication succeeded but session token was not returned. Please check your Kite API subscription."
+                log_message("ERROR", "Zerodha auth OK but enctoken missing from cookies.")
+                return False
+
+            # Use enctoken directly with KiteConnect
+            kite = KiteConnect(api_key=api_key)
+            kite.set_access_token(enctoken)
+
+            # Verify by fetching profile
+            try:
+                profile = kite.profile()
+                user_name = profile.get("user_name", user_id)
+            except Exception:
+                user_name = user_id
+
+            log_message("SUCCESS", f"Zerodha Real Authentication Successful for {user_name} ({user_id})!")
+            self.profile = {
+                "name": user_name,
+                "client_code": user_id,
+                "broker": "Zerodha Kite"
+            }
+            self.connected = True
+            self.mode = "REAL"
+            self._kite_obj = kite
+            self.client_obj = kite
+            # Save enctoken back to creds for session resumption
+            creds["zerodha_access_token"] = enctoken
+            return True
+
+        except requests.exceptions.ConnectionError:
+            err = "Could not reach Zerodha servers. Check internet connection."
+            log_message("ERROR", err)
+            self.profile["error_details"] = err
+            return False
+        except Exception as e:
+            err = str(e)
+            log_message("ERROR", f"Zerodha Authentication Exception: {err}")
+            self.profile["error_details"] = err
+            return False
+
+    def _fyers_post_request(self, path, json_payload, headers=None, timeout=10):
+        """Perform a Fyers POST request with sequential subdomain fallback.
+        Retries across api-t1.fyers.in, api.fyers.in, and api-t2.fyers.in.
+        """
+        if path.startswith("/vagator/"):
+            subdomains = ["api-t2.fyers.in", "api-t1.fyers.in", "api.fyers.in"]
+        else:
+            subdomains = ["api-t1.fyers.in", "api.fyers.in", "api-t2.fyers.in"]
+
+        last_resp = None
+        for sub in subdomains:
+            url = f"https://{sub}{path}"
+            try:
+                log_message("INFO", f"Trying Fyers POST request to {url}...")
+                r = requests.post(url, json=json_payload, headers=headers, timeout=timeout)
+                
+                # Treat 404, or 500/502/503 with "Invalid Request" as unsupported route on this subdomain
+                is_invalid_route = (r.status_code == 404) or (
+                    r.status_code in (500, 502, 503) and "invalid request" in r.text.lower()
+                )
+                if is_invalid_route:
+                    log_message("WARNING", f"Fyers endpoint {url} is not supported on this server. Trying next subdomain...")
+                    last_resp = r
+                    continue
+                return r
+            except Exception as e:
+                log_message("WARNING", f"Fyers request to {url} failed: {e}")
+        if last_resp is not None:
+            return last_resp
+        raise requests.exceptions.ConnectionError("All Fyers subdomains failed to respond.")
+
+
+    def _connect_fyers(self, config, creds):
+        """Real Fyers API v3 programmatic authentication."""
+        if not FYERS_AVAILABLE:
+            self.profile["error_details"] = "fyers-apiv3 library is not installed. Run: pip install fyers-apiv3"
+            return False
+
+        app_id = creds.get("api_key", "").strip()         # Fyers App ID e.g. "XY12345-100"
+        app_secret = creds.get("app_secret", "").strip()  # Fyers App Secret (API Secret Key)
+        client_id = creds.get("client_code", "").strip()  # Fyers Client ID e.g. "XY12345"
+        mpin = creds.get("password", "").strip()           # Fyers MPIN (4-6 digit PIN)
+        entered_otp = creds.pop("entered_otp", "").strip() # OTP sent to phone (Step 4)
+        fyers_req_key = creds.get("fyers_request_key", "").strip() # Stored from Step 3 initiation
+        # Optional: stored access_token for session resumption
+        stored_token = creds.get("fyers_access_token", "").strip()
+
+        if not app_id or not client_id or not mpin:
+            self.profile["error_details"] = "Fyers App ID, Client ID, and MPIN are required."
+            return False
+
+        # Try resuming stored access token
+        if stored_token and not entered_otp:
+            try:
+                raw_token = stored_token.split(":")[-1] if ":" in stored_token else stored_token
+                fyers = FyersModel.FyersModel(client_id=app_id, is_async=False, token=raw_token, log_path="")
+                resp = fyers.get_profile()
+                if resp and resp.get("code") == 200:
+                    pdata = resp.get("data", {})
+                    log_message("SUCCESS", f"Resumed Fyers session for {pdata.get('name', client_id)}")
+                    self.profile = {
+                        "name": pdata.get("name", client_id),
+                        "client_code": client_id,
+                        "broker": "Fyers API v3"
+                    }
+                    self.connected = True
+                    self.mode = "REAL"
+                    self.client_obj = fyers
+                    return True
+            except Exception as e:
+                log_message("WARNING", f"Stored Fyers token invalid, re-authenticating: {e}")
+
+        totp_seed = creds.get("totp_seed", "").strip()
+        if not entered_otp and totp_seed:
+            try:
+                # Request server date header from Fyers to eliminate clock drift
+                r_time = requests.get("https://api-t1.fyers.in/vagator/v2/send_login_otp", timeout=3)
+                server_time_str = r_time.headers.get("Date")
+                if server_time_str:
+                    import email.utils
+                    server_time = email.utils.parsedate_to_datetime(server_time_str).timestamp()
+                    entered_otp = pyotp.TOTP(totp_seed).at(server_time)
+                    log_message("INFO", f"Generated Fyers TOTP using Fyers server time ({server_time_str}): {entered_otp}")
+                else:
+                    entered_otp = pyotp.TOTP(totp_seed).now()
+                    log_message("INFO", f"Generated Fyers TOTP using local clock: {entered_otp}")
+            except Exception as e:
+                log_message("WARNING", f"Failed to sync clock with Fyers server: {e}")
+                try:
+                    entered_otp = pyotp.TOTP(totp_seed).now()
+                    log_message("INFO", f"Generated Fyers TOTP using fallback local clock: {entered_otp}")
+                except Exception as ex:
+                    log_message("WARNING", f"Failed to generate fallback Fyers TOTP: {ex}")
+
+        if not entered_otp:
+            self.profile["error_details"] = "Please enter the OTP sent to your registered mobile number."
+            return False
+
+        if not fyers_req_key:
+            self.profile["error_details"] = "Authentication session expired. Please go back and start from Step 3 again."
+            return False
+
+        try:
+            import hashlib
+            log_message("INFO", f"Fyers Step 2: Verifying OTP for {client_id}...")
+
+            # Step 2: Verify the phone OTP (or TOTP if totp_enabled)
+            r_verify = self._fyers_post_request(
+                "/vagator/v2/verify_otp",
+                json_payload={"request_key": fyers_req_key, "otp": entered_otp},
+                timeout=10
+            )
+            try:
+                d_verify = r_verify.json()
+            except json.JSONDecodeError:
+                log_message("ERROR", "Fyers verify_otp returned non-JSON. Likely rate-limited/blocked.")
+                self.profile["error_details"] = "Fyers server rejected the request. You are temporarily blocked due to too many failed OTP attempts. Please wait 5 minutes and try again."
+                return False
+
+            log_message("INFO", f"Fyers verify_otp response: s={d_verify.get('s')} code={d_verify.get('code')} has_key={bool(d_verify.get('request_key'))}")
+            # Fyers uses 's': 'ok' as success marker, code varies (200, 1043, etc)
+            if d_verify.get("s") != "ok" or not d_verify.get("request_key"):
+                err = d_verify.get("message") or d_verify.get("error") or "Invalid OTP / TOTP code."
+                if "invalid totp" in err.lower() or "totp" in err.lower():
+                    err += ". Tip: Ensure your mobile phone and system clock are perfectly synchronized to the correct local time."
+                log_message("ERROR", f"Fyers OTP verification failed: {d_verify}")
+                self.profile["error_details"] = f"OTP/TOTP verification failed: {err}"
+                return False
+
+            req_key_2 = d_verify["request_key"]
+            log_message("INFO", "Fyers OTP OK. Verifying MPIN...")
+
+            # Step 3: Verify MPIN (PIN)
+            r_pin = self._fyers_post_request(
+                "/vagator/v2/verify_pin",
+                json_payload={
+                    "request_key": req_key_2,
+                    "identity_type": "pin",
+                    "identifier": mpin,
+                    "recaptcha_token": ""
+                },
+                timeout=10
+            )
+            try:
+                d_pin = r_pin.json()
+            except json.JSONDecodeError:
+                log_message("ERROR", "Fyers verify_pin returned non-JSON. Likely rate-limited/blocked.")
+                self.profile["error_details"] = "Fyers server is rate-limiting pin verification. Please wait 5 minutes."
+                return False
+
+            log_message("INFO", f"Fyers verify_pin response: s={d_pin.get('s')} code={d_pin.get('code')}")
+            if d_pin.get("s") != "ok":
+                err = d_pin.get("message") or d_pin.get("error") or "Invalid MPIN / PIN."
+                log_message("ERROR", f"Fyers MPIN verification failed: {d_pin}")
+                self.profile["error_details"] = f"MPIN verification failed: {err}"
+                return False
+
+            fyers_access_token = d_pin.get("data", {}).get("access_token", "")
+            log_message("INFO", f"Fyers MPIN OK. Access Token present: {bool(fyers_access_token)}")
+            if not fyers_access_token:
+                log_message("ERROR", f"Fyers verify_pin succeeded but data.access_token is empty! Full response: {d_pin}")
+                self.profile["error_details"] = f"Fyers PIN verified but no access token returned. Response: {d_pin}"
+                return False
+
+            log_message("INFO", "Fyers MPIN OK. Requesting auth code...")
+
+            # Step 4: Get auth code using the access_token from verify_pin
+            redirect_uri = creds.get("redirect_uri", "").strip() or "https://trade.fyers.in/api-login/redirect-uri/index.html"
+            core_app_id = app_id.split("-")[0] if "-" in app_id else app_id
+            log_message("INFO", f"Fyers Token Exchange: fyers_id={client_id}, core_app_id={core_app_id}")
+            r_token = self._fyers_post_request(
+                "/api/v3/token",
+                json_payload={
+                    "fyers_id": client_id,
+                    "app_id": core_app_id,
+                    "redirect_uri": redirect_uri,
+                    "appType": "100",
+                    "code_challenge": "",
+                    "state": "None",
+                    "nonce": "",
+                    "response_type": "code",
+                    "create_cookie": True,
+                    "access_token": fyers_access_token
+                },
+                headers={"Authorization": fyers_access_token},
+                timeout=10
+            )
+            try:
+                d_auth = r_token.json()
+            except json.JSONDecodeError:
+                log_message("ERROR", f"Fyers api/v3/token returned non-JSON! Status={r_token.status_code}, Response={r_token.text[:1000]}")
+                self.profile["error_details"] = f"Fyers session token exchange failed (Status {r_token.status_code}). Please check your API App ID & App Secret or try again."
+                return False
+
+            auth_url = d_auth.get("Url", "")
+            log_message("INFO", f"Fyers token response: s={d_auth.get('s')} has_url={bool(auth_url)}")
+            if not auth_url or "auth_code=" not in auth_url:
+                err = d_auth.get("message") or f"Could not obtain auth code. Full response: {d_auth}"
+                log_message("ERROR", f"Fyers auth code failed: {d_auth}")
+                self.profile["error_details"] = f"Could not get auth code: {err}"
+                return False
+
+            auth_code = auth_url.split("auth_code=")[1].split("&")[0]
+            log_message("INFO", "Fyers auth code received. Generating access token...")
+
+            # Step 5: Exchange auth code for access token using SDK
+            if not app_secret:
+                self.profile["error_details"] = "Fyers App Secret Key is required to exchange auth code for access token."
+                return False
+
+            session = FyersModel.SessionModel(
+                client_id=app_id,
+                secret_key=app_secret,
+                redirect_uri=redirect_uri,
+                response_type="code",
+                grant_type="authorization_code"
+            )
+            session.set_token(auth_code)
+            token_resp = session.generate_token()
+            final_token = token_resp.get("access_token", "")
+            if not final_token:
+                err = token_resp.get("message") or "Failed to generate Fyers access token."
+                log_message("ERROR", f"Fyers token generation failed: {token_resp}")
+                self.profile["error_details"] = err
+                return False
+
+            # Create Fyers SDK instance with clean final token
+            fyers = FyersModel.FyersModel(client_id=app_id, is_async=False, token=final_token, log_path="")
+
+            # Verify by fetching profile
+            try:
+                pdata = fyers.get_profile().get("data", {})
+                user_name = pdata.get("name", client_id)
+            except Exception:
+                user_name = client_id
+
+            log_message("SUCCESS", f"Fyers Real Authentication Successful for {user_name} ({client_id})!")
+            self.profile = {
+                "name": user_name,
+                "client_code": client_id,
+                "broker": "Fyers API v3"
+            }
+            self.connected = True
+            self.mode = "REAL"
+            self.client_obj = fyers
+            # Save token for session resumption
+            creds["fyers_access_token"] = final_token
+            return True
+
+        except requests.exceptions.ConnectionError:
+            err = "Could not reach Fyers servers. Check internet connection."
+            log_message("ERROR", err)
+            self.profile["error_details"] = err
+            return False
+        except Exception as e:
+            err = str(e)
+            log_message("ERROR", f"Fyers Authentication Exception: {err}")
+            self.profile["error_details"] = err
+            return False
+
+    def _connect_groww(self, config, creds):
+        """Groww broker - requires their trading API credentials."""
+        api_key = creds.get("api_key", "").strip()
+        client_code = creds.get("client_code", "").strip()
+        pwd = creds.get("password", "").strip()
+        entered_otp = creds.pop("entered_otp", "").strip()
+
+        if not api_key or not client_code or not pwd:
+            log_message("ERROR", "Groww connection failed: Missing required fields.")
+            self.profile["error_details"] = "Groww API Key, Client Code, and Password are required."
+            return False
+
+        try:
+            log_message("INFO", f"Authenticating Groww user {client_code}...")
+            r = requests.post(
+                "https://groww.in/v1/api/user/login",
+                json={"email": client_code, "password": pwd, "otp": entered_otp},
+                headers={"X-App-Token": api_key, "Content-Type": "application/json"},
+                timeout=10
+            )
+            data = r.json()
+            if r.status_code != 200 or not data.get("accessToken"):
+                err = data.get("message") or data.get("error") or "Invalid credentials. Please verify Groww API Key, email, and password."
+                log_message("ERROR", f"Groww authentication failed: {err}")
+                self.profile["error_details"] = err
+                return False
+
+            access_token = data["accessToken"]
+            user_name = data.get("name", client_code)
+
+            log_message("SUCCESS", f"Groww Authentication Successful for {user_name} ({client_code})!")
+            self.profile = {
+                "name": user_name,
+                "client_code": client_code,
+                "broker": "Groww"
+            }
+            self.connected = True
+            self.mode = "REAL"
+            self.client_obj = {"access_token": access_token, "api_key": api_key}
+            return True
+        except requests.exceptions.ConnectionError:
+            err = "Could not reach Groww servers. Check internet connection."
+            log_message("ERROR", err)
+            self.profile["error_details"] = err
+            return False
+        except Exception as e:
+            err = str(e)
+            log_message("ERROR", f"Groww Authentication Exception: {err}")
+            self.profile["error_details"] = err
+            return False
+
+    def get_market_data(self, exchange_tokens):
+        """
+        Fetches LIVE market data ONLY from the connected broker's real API.
+        exchange_tokens: dict in format {exch: [token1, token2]}
+        Returns: {token: {"ltp": ltp, "bid": bid, "ask": ask}}
+        """
+        if not self.connected:
+            return {}
+
+        if self.broker == "ANGEL_ONE" and isinstance(self.client_obj, SmartConnect):
+            res = self.client_obj.getMarketData(mode="FULL", exchangeTokens=exchange_tokens)
+            return extract_market_data(res)
+
+        elif self.broker == "ZERODHA" and self._kite_obj is not None:
+            # Flatten all tokens and get quotes via Zerodha
+            # We need to convert Angel One tokens to Zerodha instrument symbols
+            zerodha_instruments = self._get_zerodha_instruments(exchange_tokens)
+            if not zerodha_instruments:
+                raise Exception("Could not map strategy legs to Zerodha instruments. Please re-add your legs.")
+            quotes = self._kite_obj.quote(zerodha_instruments)
+            result = {}
+            for orig_token, kite_sym in zerodha_instruments.items():
+                q = quotes.get(kite_sym)
+                if q:
+                    ltp = float(q.get("last_price", 0.0))
+                    bid = float(q.get("depth", {}).get("buy", [{}])[0].get("price", ltp))
+                    ask = float(q.get("depth", {}).get("sell", [{}])[0].get("price", ltp))
+                    result[orig_token] = {"ltp": ltp, "bid": bid or ltp, "ask": ask or ltp}
+            return result
+
+        elif self.broker == "FYERS" and self.client_obj is not None:
+            fyers_symbols = self._get_fyers_symbols(exchange_tokens)
+            if not fyers_symbols:
+                raise Exception("Could not map strategy legs to Fyers symbols. Please re-add your legs.")
+            syms_list = list(fyers_symbols.values())
+            resp = self.client_obj.quotes(data={"symbols": ",".join(syms_list)})
+            result = {}
+            if resp and resp.get("code") == 200:
+                for q in resp.get("d", []):
+                    sym = q.get("n", "")
+                    v = q.get("v", {})
+                    ltp = float(v.get("lp", 0.0))
+                    bid = float(v.get("bid", ltp))
+                    ask = float(v.get("ask", ltp))
+                    # Map back to original token
+                    for tok, fsym in fyers_symbols.items():
+                        if fsym == sym:
+                            result[tok] = {"ltp": ltp, "bid": bid or ltp, "ask": ask or ltp}
+            return result
+
+        else:
+            raise Exception(f"No live market data available for broker '{self.broker}'. Please ensure you are connected.")
+
+    def _get_fyers_symbols(self, exchange_tokens):
+        """Convert Angel One exchange_tokens dict to Fyers symbol strings."""
+        mapping = {}  # token -> fyers_symbol
+        if not lookup_engine:
+            return mapping
+        for exch, tokens in exchange_tokens.items():
+            for token in tokens:
+                for key, contract in lookup_engine.index.items():
+                    if contract["token"] == token:
+                        (name, expiry_norm, strike, opt_type) = key
+                        try:
+                            dt = datetime.strptime(expiry_norm, "%d%b%Y")
+                            yy = dt.strftime("%y")  # '26'
+                            fyers_exchange = "MCX" if exch == "MCX" else "NSE"
+                            
+                            # Determine if it's a monthly contract
+                            is_monthly = True
+                            if fyers_exchange == "NSE" and name in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"):
+                                # Find all expiries in the same month/year for this symbol
+                                month_expiries = []
+                                current_month = dt.month
+                                current_year = dt.year
+                                for k in lookup_engine.index.keys():
+                                    k_name, k_expiry, k_strike, k_opt = k
+                                    if k_name == name:
+                                        try:
+                                            k_dt = datetime.strptime(k_expiry, "%d%b%Y")
+                                            if k_dt.month == current_month and k_dt.year == current_year:
+                                                month_expiries.append(k_dt)
+                                        except Exception:
+                                            continue
+                                if month_expiries:
+                                    is_monthly = (dt == max(month_expiries))
+                            
+                            if is_monthly:
+                                mmm = dt.strftime("%b").upper()  # 'JUN'
+                                sym = f"{fyers_exchange}:{name}{yy}{mmm}{int(strike)}{opt_type}"
+                            else:
+                                # Weekly contract format
+                                m_code = str(dt.month)
+                                if dt.month == 10: m_code = "O"
+                                elif dt.month == 11: m_code = "N"
+                                elif dt.month == 12: m_code = "D"
+                                dd = dt.strftime("%d")  # '18'
+                                sym = f"{fyers_exchange}:{name}{yy}{m_code}{dd}{int(strike)}{opt_type}"
+                        except Exception as e:
+                            log_message("WARNING", f"Error parsing Fyers symbol: {e}")
+                            sym = f"NSE:{name}{expiry_norm[:7]}{strike}{opt_type}"
+                            
+                        mapping[token] = sym
+                        break
+        return mapping
+
+    def _get_zerodha_instruments(self, exchange_tokens):
+        """Convert Angel One tokens to Zerodha tradingsymbol strings."""
+        mapping = {}  # token -> zerodha_symbol
+        if not lookup_engine:
+            return mapping
+        for exch, tokens in exchange_tokens.items():
+            for token in tokens:
+                for key, contract in lookup_engine.index.items():
+                    if contract["token"] == token:
+                        (name, expiry_norm, strike, opt_type) = key
+                        try:
+                            dt = datetime.strptime(expiry_norm, "%d%b%Y")
+                            yy = dt.strftime("%y")  # '26'
+                            zerodha_exchange = "MCX" if exch == "MCX" else "NFO"
+                            
+                            if exch == "MCX":
+                                mmm = dt.strftime("%b").upper()  # 'JUN'
+                                sym = f"{zerodha_exchange}:{name}{yy}{mmm}{int(strike)}{opt_type}"
+                            else:
+                                # Determine if it's a monthly contract
+                                is_monthly = True
+                                if name in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"):
+                                    # Find all expiries in the same month/year for this symbol
+                                    month_expiries = []
+                                    current_month = dt.month
+                                    current_year = dt.year
+                                    for k in lookup_engine.index.keys():
+                                        k_name, k_expiry, k_strike, k_opt = k
+                                        if k_name == name:
+                                            try:
+                                                k_dt = datetime.strptime(k_expiry, "%d%b%Y")
+                                                if k_dt.month == current_month and k_dt.year == current_year:
+                                                    month_expiries.append(k_dt)
+                                            except Exception:
+                                                continue
+                                    if month_expiries:
+                                        is_monthly = (dt == max(month_expiries))
+                                
+                                if is_monthly:
+                                    mmm = dt.strftime("%b").upper()  # 'JUN'
+                                    sym = f"{zerodha_exchange}:{name}{yy}{mmm}{int(strike)}{opt_type}"
+                                else:
+                                    # Weekly contract format
+                                    m = dt.month
+                                    if m == 10: m_code = "O"
+                                    elif m == 11: m_code = "N"
+                                    elif m == 12: m_code = "D"
+                                    else: m_code = str(m)
+                                    dd = dt.strftime("%d")  # '18'
+                                    sym = f"{zerodha_exchange}:{name}{yy}{m_code}{dd}{int(strike)}{opt_type}"
+                        except Exception as e:
+                            log_message("WARNING", f"Error parsing Zerodha symbol: {e}")
+                            sym = f"NFO:{name}{expiry_norm[:7]}{strike}{opt_type}"
+                            
+                        mapping[token] = sym
+                        break
+        return mapping
+
+    def place_order(self, orderparams):
+        if not self.connected:
+            raise Exception("Broker disconnected.")
+
+        if self.broker == "ANGEL_ONE" and isinstance(self.client_obj, SmartConnect):
+            return self.client_obj.placeOrder(orderparams)
+
+        elif self.broker == "ZERODHA" and self._kite_obj is not None:
+            # Map order params to Kite format
+            kite_params = {
+                "tradingsymbol": orderparams["tradingsymbol"],
+                "exchange": orderparams.get("exchange", "NFO"),
+                "transaction_type": orderparams["transactiontype"],
+                "quantity": int(orderparams["quantity"]),
+                "order_type": orderparams.get("ordertype", "MARKET"),
+                "product": "NRML",
+            }
+            order_id = self._kite_obj.place_order(variety="regular", **kite_params)
+            log_message("SUCCESS", f"[ZERODHA] Order placed. ID: {order_id}")
+            return str(order_id)
+
+        elif self.broker == "FYERS" and self.client_obj is not None:
+            fyers_params = {
+                "symbol": orderparams["tradingsymbol"],
+                "qty": int(orderparams["quantity"]),
+                "type": 2,  # Market order
+                "side": 1 if orderparams["transactiontype"] == "BUY" else -1,
+                "productType": "MARGIN",
+                "limitPrice": 0,
+                "stopPrice": 0,
+                "validity": "DAY",
+                "disclosedQty": 0,
+                "offlineOrder": False,
+                "orderTag": "TRADEHUB"
+            }
+            resp = self.client_obj.place_order(data=fyers_params)
+            if resp and resp.get("code") == 200:
+                order_id = resp.get("id", str(resp))
+                log_message("SUCCESS", f"[FYERS] Order placed. ID: {order_id}")
+                return str(order_id)
+            else:
+                raise Exception(f"Fyers order failed: {resp}")
+
+        else:
+            raise Exception(f"Order placement not supported for broker '{self.broker}'. Please reconnect.")
+
+    def get_order_book(self):
+        if not self.connected:
+            return []
+        if self.broker == "ANGEL_ONE" and isinstance(self.client_obj, SmartConnect):
+            try:
+                res = self.client_obj.orderBook()
+                if res and res.get("status") is True:
+                    return res.get("data", [])
+            except Exception:
+                pass
+        elif self.broker == "ZERODHA" and self._kite_obj is not None:
+            try:
+                return self._kite_obj.orders() or []
+            except Exception:
+                pass
+        elif self.broker == "FYERS" and self.client_obj is not None:
+            try:
+                resp = self.client_obj.orderbook()
+                if resp and resp.get("code") == 200:
+                    return resp.get("orderBook", [])
+            except Exception:
+                pass
+        return []
+
+# Global Broker Wrapper Instantiation
+unified_broker = UnifiedBrokerClient()
+
+# ==========================================
+# 4. UTILITIES & EXPIRY NORMALIZER
+# ==========================================
+def normalize_expiry(expiry_val):
+    if not expiry_val:
+        return ""
+    
+    val = str(expiry_val).strip().upper()
+    val = val.replace("-", "").replace("/", "").replace(" ", "")
+    
+    # Robust regular expression matching for dynamic formats
+    match = re.match(r"^(\d{1,2})([A-Z]{3})(\d{1,4})$", val)
+    if match:
+        day_str = match.group(1)
+        month_str = match.group(2)
+        year_str = match.group(3)
+        
+        if len(day_str) == 1:
+            day_str = "0" + day_str
+            
+        if len(year_str) == 1:
+            year_str = "202" + year_str
+        elif len(year_str) == 2:
+            year_str = "20" + year_str
+        elif len(year_str) == 3:
+            if year_str.startswith("20"):
+                year_str = "202" + year_str[2:]  # '206' -> '2026'
+            else:
+                year_str = "20" + year_str[1:]
+                
+        return f"{day_str}{month_str}{year_str}"
+        
+    return val
+
+def extract_market_data(api_response):
+    market_data = {}
+    if not api_response:
+        return market_data
+        
+    status = api_response.get("status")
+    success = api_response.get("success")
+    msg = api_response.get("message", "")
+    err_code = api_response.get("errorCode") or api_response.get("errorcode", "")
+    
+    if (status is False or success is False or "Invalid Token" in msg or "AG8001" in err_code):
+        if "Invalid Token" in msg or "AG8001" in err_code or "expired" in msg.lower():
+            raise Exception(f"Angel One session expired or token is invalid: {msg} (Code: {err_code})")
+            
+    if not status and not success:
+        return market_data
+        
+    data = api_response.get("data")
+    if not data or "fetched" not in data:
+        return market_data
+        
+    for item in data["fetched"]:
+        token = item.get("symbolToken")
+        ltp = float(item.get("ltp", 0.0))
+        
+        bid = 0.0
+        ask = 0.0
+        depth = item.get("depth", {})
+        
+        buy_list = depth.get("buy", [])
+        if buy_list and len(buy_list) > 0:
+            bid = float(buy_list[0].get("price", 0.0))
+            
+        sell_list = depth.get("sell", [])
+        if sell_list and len(sell_list) > 0:
+            ask = float(sell_list[0].get("price", 0.0))
+            
+        if bid == 0.0:
+            bid = ltp
+        if ask == 0.0:
+            ask = ltp
+            
+        market_data[token] = {
+            "ltp": ltp,
+            "bid": bid,
+            "ask": ask
+        }
+    return market_data
+
+# ==========================================
+# 5. ORDER PLACEMENT ENGINE (TRADE AUTOMATION)
+# ==========================================
+def execute_strategy_trade(obj, strategy, action_type):
+    """
+    Executes standard market orders for all legs in the strategy.
+    action_type: "BUY" or "SELL"
+    """
+    legs = strategy["legs"]
+    symbol = strategy["symbol"]
+    
+    if not legs:
+        log_message("ERROR", f"Strategy {symbol} has no legs configured.")
+        strategy["status"] = "Error: No legs configured."
+        return False
+        
+    order_ids = []
+    error_msg = None
+    
+    log_message("INFO", f"[TRADE] Executing Strategy {action_type} for {symbol}...")
+    strategy["status"] = f"[PROCESSING] Placing {action_type} orders..."
+    
+    for leg in legs:
+        if action_type == "BUY":
+            leg_action = leg["action"]
+        else: # "SELL"
+            leg_action = "SELL" if leg["action"] == "BUY" else "BUY"
+            
+        token = leg["token"]
+        trading_symbol = leg["symbol"]
+        
+        # Calculate quantity based on standard lotsize * leg weight * strategy multiplier
+        lotsize = leg.get("lotsize", 1)
+        strategy_mult = strategy.get("strategy_lot", 1.0)
+        quantity = int(lotsize * leg["lot"] * strategy_mult)
+        
+        exch = leg.get("exch_seg", "NFO")
+        orderparams = {
+            "variety": "NORMAL",
+            "tradingsymbol": trading_symbol,
+            "symboltoken": token,
+            "transactiontype": leg_action,
+            "exchange": exch,
+            "ordertype": "MARKET",
+            "producttype": "CARRYFORWARD",
+            "duration": "DAY",
+            "price": "0",
+            "quantity": str(quantity)
+        }
+        
+        try:
+            log_message("INFO", f"[TRADE] Placing order: {leg_action} {quantity} {trading_symbol} ({token})")
+            orderId = obj.place_order(orderparams)
+            if orderId:
+                order_ids.append(orderId)
+                order_status = "SUBMITTED"
+                try:
+                    orders = obj.get_order_book()
+                    for o in orders:
+                        if o.get("orderid") == orderId:
+                            order_status = o.get("status", "SUBMITTED").upper()
+                            if order_status == "REJECTED" and o.get("text"):
+                                order_status += f" ({o.get('text')})"
+                            break
+                except Exception as e:
+                    log_message("WARNING", f"Could not fetch order status: {e}")
+                
+                leg["status"] = f"Order Placed: {orderId} | Status: {order_status}"
+            else:
+                error_msg = f"Order failed for leg strike {leg['strike']}"
+                leg["status"] = "Order Failed: No ID returned"
+        except Exception as e:
+            error_msg = f"Exception: {str(e)}"
+            leg["status"] = f"Order Exception: {str(e)}"
+            log_message("ERROR", f"Leg Order Exception: {e}")
+            
+    # Reset triggers to prevent double executing orders
+    strategy["trade_action"] = ""
+    strategy["execute_trigger"] = ""
+    save_strategies_to_disk()
+        
+    if order_ids:
+        success_log = f"[SUCCESS] {action_type} executed! IDs: {', '.join(order_ids)}"
+        strategy["status"] = success_log
+        log_message("SUCCESS", f"Strategy Trade Success: {success_log}")
+        return True
+    else:
+        fail_log = f"[ERROR] Execution failed: {error_msg}"
+        strategy["status"] = fail_log
+        log_message("ERROR", f"Strategy Trade Failed: {fail_log}")
+        return False
+
+# ==========================================
+# 6. LOCAL PERSISTENCE HELPERS
+# ==========================================
+def save_strategies_to_disk():
+    try:
+        with open(STRATEGIES_FILE, "w") as f:
+            json.dump(active_strategies, f, indent=4)
+    except Exception as e:
+        print(f"[ERROR] Failed to save strategies to file: {e}")
+
+def load_strategies_from_disk():
+    global active_strategies
+    if os.path.exists(STRATEGIES_FILE):
+        try:
+            with open(STRATEGIES_FILE, "r") as f:
+                active_strategies = json.load(f)
+            log_message("SUCCESS", f"Loaded {len(active_strategies)} strategies from '{STRATEGIES_FILE}'")
+        except Exception as e:
+            log_message("ERROR", f"Failed to load '{STRATEGIES_FILE}': {e}. Starting fresh.")
+            active_strategies = {}
+    else:
+        active_strategies = {}
+
+def seed_sample_strategies():
+    """
+    Seeds a couple of demo strategies dynamically using currently valid expiries so the user
+    sees pricing active out-of-the-box.
+    """
+    global active_strategies
+    if active_strategies:
+        return
+        
+    log_message("INFO", "Seeding template multi-leg strategies...")
+    
+    # 1. DLF CE Spread (NFO)
+    nfo_expiry = lookup_engine.sorted_nfo_expiries[0] if lookup_engine.sorted_nfo_expiries else "25-Jun-2026"
+    norm_nfo = normalize_expiry(nfo_expiry)
+    
+    leg1 = lookup_engine.lookup("DLF", norm_nfo, 800, "CE")
+    leg2 = lookup_engine.lookup("DLF", norm_nfo, 820, "CE")
+    
+    if leg1 and leg2:
+        active_strategies["1001"] = {
+            "symbol": "DLF",
+            "expiry": nfo_expiry,
+            "strategy_lot": 1.0,
+            "target_buy": 5.0,
+            "target_sell": -15.0,
+            "trade_action": "SET TARGET BUY",
+            "execute_trigger": "",
+            "buy_diff": None,
+            "sell_diff": None,
+            "status": "Strategy active.",
+            "legs": [
+                {
+                    "strike": 800,
+                    "opt_type": "CE",
+                    "expiry": nfo_expiry,
+                    "action": "BUY",
+                    "lot": 1.0,
+                    "token": leg1["token"],
+                    "symbol": leg1["symbol"],
+                    "lotsize": leg1["lotsize"],
+                    "exch_seg": "NFO",
+                    "status": "Pending live quotes..."
+                },
+                {
+                    "strike": 820,
+                    "opt_type": "CE",
+                    "expiry": nfo_expiry,
+                    "action": "SELL",
+                    "lot": 1.0,
+                    "token": leg2["token"],
+                    "symbol": leg2["symbol"],
+                    "lotsize": leg2["lotsize"],
+                    "exch_seg": "NFO",
+                    "status": "Pending live quotes..."
+                }
+            ]
+        }
+        
+    # 2. GOLD Option Spread (MCX)
+    mcx_expiry = lookup_engine.sorted_mcx_expiries[0] if lookup_engine.sorted_mcx_expiries else "26-May-2026"
+    norm_mcx = normalize_expiry(mcx_expiry)
+    
+    mleg1 = lookup_engine.lookup("GOLD", norm_mcx, 72000, "CE")
+    mleg2 = lookup_engine.lookup("GOLD", norm_mcx, 73000, "CE")
+    
+    if mleg1 and mleg2:
+        active_strategies["1002"] = {
+            "symbol": "GOLD",
+            "expiry": mcx_expiry,
+            "strategy_lot": 1.0,
+            "target_buy": 100.0,
+            "target_sell": -200.0,
+            "trade_action": "",
+            "execute_trigger": "",
+            "buy_diff": None,
+            "sell_diff": None,
+            "status": "Strategy active.",
+            "legs": [
+                {
+                    "strike": 72000,
+                    "opt_type": "CE",
+                    "expiry": mcx_expiry,
+                    "action": "BUY",
+                    "lot": 1.0,
+                    "token": mleg1["token"],
+                    "symbol": mleg1["symbol"],
+                    "lotsize": mleg1["lotsize"],
+                    "exch_seg": "MCX",
+                    "status": "Pending live quotes..."
+                },
+                {
+                    "strike": 73000,
+                    "opt_type": "CE",
+                    "expiry": mcx_expiry,
+                    "action": "SELL",
+                    "lot": 1.0,
+                    "token": mleg2["token"],
+                    "symbol": mleg2["symbol"],
+                    "lotsize": mleg2["lotsize"],
+                    "exch_seg": "MCX",
+                    "status": "Pending live quotes..."
+                }
+            ]
+        }
+        
+    save_strategies_to_disk()
+    log_message("SUCCESS", "Template strategies successfully seeded on first launch!")
+
+# ==========================================
+# 7. TRADING ENGINE BACKGROUND LOOP
+# ==========================================
+def run_trading_engine_thread():
+    global unified_broker, engine_running
+    
+    log_message("INFO", "Starting SaaS Trade Hub trading loop background process...")
+    
+    # Hot-load config at startup if present
+    config = load_client_config()
+    if config:
+        unified_broker.connect(config)
+    
+    while True:
+        try:
+            # 1. Self-healing token check and verification
+            if not unified_broker.connected:
+                config = load_client_config()
+                if config:
+                    log_message("WARNING", "Reconnecting session to active Broker API...")
+                    unified_broker.connect(config)
+                if not unified_broker.connected:
+                    time.sleep(3.0)
+                    continue
+                    
+            # 2. Gather active tokens
+            tokens_to_fetch = {} # Mapping token -> exch_seg
+            
+            with state_lock:
+                for strat in active_strategies.values():
+                    for leg in strat["legs"]:
+                        if leg.get("token"): # ONLY fetch if token is resolved
+                            tokens_to_fetch[leg["token"]] = leg.get("exch_seg", "NFO")
+            
+            # 3. Pull real-time quotes in grouped chunks
+            market_data = {}
+            if tokens_to_fetch:
+                by_exchange = {}
+                for token, exch in tokens_to_fetch.items():
+                    if exch not in by_exchange:
+                        by_exchange[exch] = []
+                    by_exchange[exch].append(token)
+                    
+                chunk_size = 45
+                try:
+                    for exch, tokens in by_exchange.items():
+                        for i in range(0, len(tokens), chunk_size):
+                            chunk = tokens[i:i+chunk_size]
+                            chunk_data = unified_broker.get_market_data({exch: chunk})
+                            market_data.update(chunk_data)
+                            time.sleep(0.4)  # Robust cooldown between rapid chunk requests to prevent rate limits!
+                except Exception as e:
+                    err_msg = str(e)
+                    if "exceeding access rate" in err_msg.lower() or "access denied" in err_msg.lower() or "too many requests" in err_msg.lower():
+                        log_message("WARNING", f"Rate limit exceeded (Access Rate Exceeded). Sleeping for 5s to cool down...")
+                        time.sleep(5.0)
+                    else:
+                        log_message("WARNING", f"Feed API Exception: {e}. Authenticating a fresh token...")
+                        config = load_client_config()
+                        if config:
+                            unified_broker.connect(config)
+                        time.sleep(2.0)
+                    continue
+            
+            # 4. Perform Badla Spread Calculations & Evaluate Triggers
+            with state_lock:
+                for strat_id, strat in list(active_strategies.items()):
+                    legs = strat["legs"]
+                    if not legs:
+                        strat["buy_diff"] = None
+                        strat["sell_diff"] = None
+                        strat["status"] = "Configure leg strikes below."
+                        continue
+                        
+                    unconfigured_legs = [leg for leg in legs if not leg.get("token")]
+                    if unconfigured_legs:
+                        strat["buy_diff"] = None
+                        strat["sell_diff"] = None
+                        strat["status"] = "Configure all leg strikes to stream spreads."
+                        for leg in legs:
+                            if not leg.get("token"):
+                                leg["status"] = leg.get("status") or "Strike not configured."
+                        continue
+                        
+                    missing_tokens = [leg for leg in legs if leg.get("token") and leg["token"] not in market_data]
+                    if missing_tokens:
+                        strat["status"] = "Waiting for live quotes..."
+                        for leg in legs:
+                            if leg.get("token") and leg["token"] not in market_data:
+                                leg["status"] = "Waiting for live quotes..."
+                        continue
+                        
+                    buy_diff = 0.0
+                    sell_diff = 0.0
+                    
+                    for leg in legs:
+                        token = leg["token"]
+                        q = market_data[token]
+                        ltp, bid, ask = q["ltp"], q["bid"], q["ask"]
+                        
+                        leg["ltp"] = ltp
+                        leg["bid"] = bid
+                        leg["ask"] = ask
+                        
+                        # Calculate quantity based on standard lotsize * leg weight * strategy multiplier
+                        lotsize = leg.get("lotsize", 1)
+                        strategy_mult = strat.get("strategy_lot", 1.0)
+                        leg["qty"] = int(lotsize * leg["lot"] * strategy_mult)
+                        
+                        leg["status"] = "Live update active."
+                        
+                        lot = leg["lot"]
+                        if leg["action"] == "BUY":
+                            buy_diff += lot * ask
+                            sell_diff += lot * bid
+                        elif leg["action"] == "SELL":
+                            buy_diff -= lot * bid
+                            sell_diff -= lot * ask
+                            
+                    strat["buy_diff"] = round(buy_diff, 2)
+                    strat["sell_diff"] = round(sell_diff, 2)
+                    
+                    # 5. Check order triggers
+                    if not engine_running:
+                        strat["status"] = "[ENGINE STOPPED] Trade engine is paused."
+                        continue
+                        
+                    trade_action = strat.get("trade_action", "")
+                    execute_trigger = strat.get("execute_trigger", "")
+                    target_buy = strat.get("target_buy")
+                    target_sell = strat.get("target_sell")
+                    rounded_buy = strat["buy_diff"]
+                    rounded_sell = strat["sell_diff"]
+                    
+                    if trade_action == "BUY NOW":
+                        if execute_trigger != "GO":
+                            strat["status"] = "[CONFIRM REQUIRED] Click GO to trigger BUY."
+                        else:
+                            execute_strategy_trade(unified_broker, strat, "BUY")
+                            
+                    elif trade_action == "SELL NOW":
+                        if execute_trigger != "GO":
+                            strat["status"] = "[CONFIRM REQUIRED] Click GO to trigger SELL."
+                        else:
+                            execute_strategy_trade(unified_broker, strat, "SELL")
+                            
+                    elif trade_action == "SET TARGET BUY":
+                        if target_buy is None:
+                            strat["status"] = "[ERROR] Enter Target Buy parameter."
+                        else:
+                            if execute_trigger != "GO":
+                                strat["status"] = f"[WAITING] Activate with GO | Target Buy: {target_buy}"
+                            else:
+                                if rounded_buy <= target_buy:
+                                    log_message("SUCCESS", f"[TRIGGER] {strat['symbol']} Buy Diff {rounded_buy} <= Target {target_buy}!")
+                                    execute_strategy_trade(unified_broker, strat, "BUY")
+                                else:
+                                    strat["status"] = f"[ACTIVE] Target Buy: {target_buy} | Current Buy: {rounded_buy} | Waiting..."
+                                    
+                    elif trade_action == "SET TARGET SELL":
+                        if target_sell is None:
+                            strat["status"] = "[ERROR] Enter Target Sell parameter."
+                        else:
+                            if execute_trigger != "GO":
+                                strat["status"] = f"[WAITING] Activate with GO | Target Sell: {target_sell}"
+                            else:
+                                if rounded_sell >= target_sell:
+                                    log_message("SUCCESS", f"[TRIGGER] {strat['symbol']} Sell Diff {rounded_sell} >= Target {target_sell}!")
+                                    execute_strategy_trade(unified_broker, strat, "SELL")
+                                else:
+                                    strat["status"] = f"[ACTIVE] Target Sell: {target_sell} | Current Sell: {rounded_sell} | Waiting..."
+                                    
+                    elif trade_action == "CANCEL":
+                        strat["target_buy"] = null = None
+                        strat["target_sell"] = null = None
+                        strat["trade_action"] = ""
+                        strat["execute_trigger"] = ""
+                        strat["status"] = "Trigger cancelled."
+                        save_strategies_to_disk()
+                        
+                    else:
+                        strat["status"] = "Live update active."
+            
+            time.sleep(1.5)
+            
+        except Exception as e:
+            log_message("ERROR", f"Trading Engine loop caught exception: {e}")
+            time.sleep(3.0)
+
+# ==========================================
+# 8. FLASK SERVER ENDPOINTS
+# ==========================================
+app = Flask(__name__, template_folder='templates')
+
+@app.route('/')
+def home():
+    return send_from_directory('templates', 'index.html')
+
+# Registration OTP caching dictionary
+temp_otp_cache = {}
+
+def logout_helper():
+    global unified_broker, engine_running
+    engine_running = False
+    log_message("WARNING", "Clearing SaaS broker credentials...")
+    
+    if os.path.exists(CLIENT_CONFIG_FILE):
+        try:
+            os.remove(CLIENT_CONFIG_FILE)
+        except Exception:
+            pass
+            
+    if os.path.exists(TOKENS_FILE):
+        try:
+            os.remove(TOKENS_FILE)
+        except Exception:
+            pass
+            
+    unified_broker.connected = False
+    unified_broker.broker = "NONE"
+    unified_broker.profile = {"name": "Not Logged In", "client_code": "----", "broker": "NONE"}
+    unified_broker.client_obj = None
+    unified_broker._kite_obj = None
+    unified_broker.mode = "REAL"
+
+def panic_stop_helper():
+    global active_strategies, engine_running
+    engine_running = False
+    log_message("CRITICAL", "[EMERGENCY STOP] All strategies have been cancelled and triggers deactivated!")
+    with state_lock:
+        for strat in active_strategies.values():
+            strat["target_buy"] = None
+            strat["target_sell"] = None
+            strat["trade_action"] = ""
+            strat["execute_trigger"] = ""
+            strat["status"] = "[EMERGENCY STOPPED] Strategy cancelled."
+            for leg in strat["legs"]:
+                leg["status"] = "Emergency cancelled."
+        save_strategies_to_disk()
+
+@app.route('/api/auth/status', methods=['GET'])
+def auth_status():
+    has_config = os.path.exists(CLIENT_CONFIG_FILE)
+    return jsonify({
+        "registered": has_config,
+        "connected": unified_broker.connected,
+        "profile": unified_broker.profile
+    })
+
+@app.route('/api/auth/register', methods=['POST'])
+def auth_register():
+    """Step 3 handler: save credentials and initiate broker first-step authentication.
+    For Fyers: calls send_login_otp so phone OTP is sent.
+    For Angel One / Zerodha: simply validates fields and proceeds to Step 4 TOTP entry.
+    """
+    global temp_otp_cache
+    try:
+        req = request.json
+        if not req:
+            return jsonify({"status": "error", "message": "Invalid request body. Expected JSON."}), 400
+
+        name = req.get("client_name", "").strip()
+        email = req.get("client_email", "").strip()
+        mobile = req.get("client_mobile", "").strip()
+        broker = req.get("selected_broker", "ANGEL_ONE").upper().strip()
+        creds = req.get("credentials", {}) or {}
+
+        if not name or not email or not mobile:
+            return jsonify({"status": "error", "message": "Name, Email, and Mobile are required."}), 400
+
+        broker_std = "ANGEL_ONE"
+        if "ZERODHA" in broker:
+            broker_std = "ZERODHA"
+        elif "FYERS" in broker:
+            broker_std = "FYERS"
+        elif "GROWW" in broker:
+            broker_std = "GROWW"
+
+        # Validate that required broker-specific fields are not empty
+        api_key = creds.get("api_key", "").strip()
+        client_code = creds.get("client_code", "").strip()
+        password = creds.get("password", "").strip()
+
+        if not api_key or not client_code or not password:
+            missing = []
+            if not api_key: missing.append("API Key / App ID")
+            if not client_code: missing.append("Client ID / User ID")
+            if not password: missing.append("MPIN / Password")
+            return jsonify({"status": "error", "message": f"Missing required fields: {', '.join(missing)}"}), 400
+
+        step4_hint = "Enter your 6-digit TOTP code from your authenticator app."
+
+        # For Fyers: initiate send_login_otp to trigger phone OTP or do TOTP auto-login
+        if broker_std == "FYERS":
+            totp_seed = creds.get("totp_seed", "").strip()
+            if totp_seed:
+                log_message("INFO", f"Fyers TOTP Key provided. Attempting automatic login for {client_code}...")
+                try:
+                    # 1. Trigger the OTP request to get a request_key
+                    r = unified_broker._fyers_post_request(
+                        "/vagator/v2/send_login_otp",
+                        json_payload={"fy_id": client_code, "app_id": "2"},
+                        timeout=10
+                    )
+                    d = r.json()
+                    if d.get("s") != "ok" or not d.get("request_key"):
+                        err = d.get("message") or d.get("error") or "Fyers rejected Client ID."
+                        return jsonify({"status": "error", "message": f"Fyers login initiation failed: {err}"}), 400
+                    
+                    # 2. Store the request key in credentials
+                    creds["fyers_request_key"] = d["request_key"]
+                    creds["fyers_totp_enabled"] = d.get("totp_enabled", True)
+                    
+                    # 3. Setup temp_otp_cache structure so connect() method works perfectly
+                    temp_cache = {
+                        "client_name": name,
+                        "client_email": email,
+                        "client_mobile": mobile,
+                        "selected_broker": "FYERS",
+                        "credentials": creds
+                    }
+                    
+                    # 4. Call connect() which will automatically generate TOTP, verify MPIN, and exchange token!
+                    success = unified_broker.connect(temp_cache)
+                    if success and unified_broker.connected:
+                        config_data = {
+                            "client_name": name,
+                            "client_email": email,
+                            "client_mobile": mobile,
+                            "selected_broker": "FYERS",
+                            "credentials": temp_cache["credentials"],
+                            "mode": "REAL",
+                            "registered_at": datetime.now().isoformat()
+                        }
+                        save_client_config(config_data)
+                        log_message("SUCCESS", f"Client '{name}' successfully auto-connected to FYERS in REAL mode.")
+                        return jsonify({
+                            "status": "success", 
+                            "connected": True, 
+                            "message": "Successfully connected to FYERS automatically using your TOTP key!"
+                        })
+                    else:
+                        err_detail = unified_broker.profile.get("error_details", "Auto-connection failed.")
+                        log_message("WARNING", f"Fyers auto-connection with TOTP seed failed: {err_detail}. Falling back to manual OTP card.")
+                        step4_hint = f"Fyers auto-login failed: {err_detail}. Please enter your 6-digit SMS OTP or current Authenticator TOTP manually below."
+                except Exception as e:
+                    log_message("WARNING", f"Fyers auto-connection exception: {e}. Falling back to manual OTP card.")
+                    step4_hint = f"Fyers auto-login failed with error: {str(e)}. Please enter your 6-digit SMS OTP or current Authenticator TOTP manually below."
+            
+            # Normal Fyers login flow without totp_seed (prompts for Step 4 OTP)
+            try:
+                log_message("INFO", f"Fyers Step 1: Sending login OTP to {client_code}...")
+                r = unified_broker._fyers_post_request(
+                    "/vagator/v2/send_login_otp",
+                    json_payload={"fy_id": client_code, "app_id": "2"},
+                    timeout=10
+                )
+                d = r.json()
+                log_message("INFO", f"Fyers send_login_otp response: s={d.get('s')} code={d.get('code')} msg={d.get('message')}")
+                if d.get("s") != "ok" or not d.get("request_key"):
+                    err = d.get("message") or d.get("error") or "Fyers rejected your Client ID. Please verify it."
+                    log_message("ERROR", f"Fyers send_login_otp failed: {d}")
+                    return jsonify({"status": "error", "message": f"Fyers login initiation failed: {err}"}), 400
+
+                fyers_req_key = d["request_key"]
+                totp_enabled = d.get("totp_enabled", False)
+                creds["fyers_request_key"] = fyers_req_key
+                creds["fyers_totp_enabled"] = totp_enabled
+
+                step4_hint = "Fyers sent an SMS OTP to your registered phone. Enter that 6-digit SMS OTP below. If that is rejected, try entering the 6-digit TOTP from your authenticator app (Google Authenticator)."
+                log_message("INFO", f"Fyers send_login_otp successfully initiated. totp_enabled={totp_enabled}")
+            except json.JSONDecodeError:
+                log_message("ERROR", "Fyers send_login_otp returned a non-JSON HTML block (often due to temporary IP rate limits from too many fast requests).")
+                return jsonify({"status": "error", "message": "Fyers server is temporarily rate-limiting connection requests. Please wait 5 minutes and try again."}), 429
+            except requests.exceptions.ConnectionError:
+                return jsonify({"status": "error", "message": "Could not reach Fyers servers. Please check your internet connection."}), 503
+            except Exception as e:
+                log_message("ERROR", f"Fyers send_login_otp exception: {e}")
+                return jsonify({"status": "error", "message": f"Fyers connection error: {str(e)}"}), 500
+
+        temp_otp_cache = {
+            "client_name": name,
+            "client_email": email,
+            "client_mobile": mobile,
+            "selected_broker": broker_std,
+            "credentials": creds
+        }
+
+        log_message("INFO", f"Registration Step 3 complete for {name} ({broker_std}). Proceeding to Step 4 authentication.")
+        return jsonify({"status": "success", "message": step4_hint})
+
+    except Exception as ex:
+        log_message("ERROR", f"Unhandled exception in auth_register: {ex}")
+        import traceback; traceback.print_exc()
+        return jsonify({"status": "error", "message": f"Server error: {str(ex)}"}), 500
+
+@app.route('/api/auth/verify-otp', methods=['POST'])
+def auth_verify_otp():
+    """Step 4 handler: completes broker authentication with OTP/TOTP.
+    NO demo bypass, NO mock login. If credentials are wrong, returns a clear error.
+    """
+    global temp_otp_cache
+    req = request.json
+    otp_entered = str(req.get("otp", "")).strip()
+
+    if not temp_otp_cache:
+        return jsonify({"status": "error", "message": "Registration session expired. Please go back and start from Step 1."}), 400
+
+    if not otp_entered:
+        return jsonify({"status": "error", "message": "Please enter your OTP / TOTP code to continue."}), 400
+
+    # Store the OTP/TOTP in credentials so the connection methods can use it
+    temp_otp_cache["credentials"]["entered_otp"] = otp_entered
+    broker_name = temp_otp_cache.get("selected_broker", "BROKER")
+
+    log_message("INFO", f"Step 4: Attempting real {broker_name} authentication...")
+
+    # Attempt REAL broker authentication - no bypass, no fallback
+    success = unified_broker.connect(temp_otp_cache)
+
+    if not success:
+        err_detail = unified_broker.profile.get("error_details",
+            "Authentication failed. Please verify all your credentials and try again.")
+        log_message("ERROR", f"{broker_name} authentication failed: {err_detail}")
+        return jsonify({
+            "status": "error",
+            "message": f"❌ {broker_name} authentication failed: {err_detail}"
+        }), 401
+
+    # Save only if truly connected
+    if not unified_broker.connected:
+        return jsonify({"status": "error", "message": "Broker reported success but connection state is invalid. Please retry."}), 500
+
+    config_data = {
+        "client_name": temp_otp_cache["client_name"],
+        "client_email": temp_otp_cache["client_email"],
+        "client_mobile": temp_otp_cache["client_mobile"],
+        "selected_broker": broker_name,
+        "credentials": temp_otp_cache["credentials"],
+        "mode": "REAL",
+        "registered_at": datetime.now().isoformat()
+    }
+
+    save_client_config(config_data)
+    temp_otp_cache = {}
+
+    log_message("SUCCESS", f"Client '{config_data['client_name']}' successfully connected to {broker_name} in REAL mode.")
+    return jsonify({"status": "success", "message": f"Successfully connected to {broker_name}!"})
+
+@app.route('/api/auth/logout', methods=['POST'])
+def auth_logout():
+    logout_helper()
+    panic_stop_helper()
+    return jsonify({"status": "success"})
+
+@app.route('/api/state', methods=['GET'])
+def get_state():
+    with state_lock:
+        state = {
+            "profile_name": unified_broker.profile["name"],
+            "client_code": unified_broker.profile["client_code"],
+            "broker": unified_broker.profile["broker"],
+            "connected": unified_broker.connected,
+            "mode": unified_broker.mode,
+            "strategies": active_strategies,
+            "logs": app_logs,
+            "nfo_expiries": lookup_engine.sorted_nfo_expiries if lookup_engine else [],
+            "mcx_expiries": lookup_engine.sorted_mcx_expiries if lookup_engine else [],
+            "nfo_symbols": lookup_engine.nfo_symbols if lookup_engine else [],
+            "mcx_symbols": lookup_engine.mcx_symbols if lookup_engine else [],
+            "engine_running": engine_running
+        }
+    return jsonify(state)
+
+@app.route('/api/engine/start', methods=['POST'])
+def start_engine():
+    global engine_running
+    with state_lock:
+        engine_running = True
+    log_message("SUCCESS", "Trading Engine STARTED. Live monitoring and execution is active.")
+    return jsonify({"status": "success"})
+
+@app.route('/api/engine/stop', methods=['POST'])
+def stop_engine():
+    global engine_running
+    logout_helper()
+    panic_stop_helper()
+    log_message("WARNING", "Trading Engine STOPPED and logged out.")
+    return jsonify({"status": "success"})
+
+@app.route('/api/engine/panic-stop', methods=['POST'])
+def panic_stop():
+    panic_stop_helper()
+    logout_helper()
+    return jsonify({"status": "success"})
+
+@app.route('/api/strategy/add', methods=['POST'])
+def add_strategy():
+    global active_strategies
+    req = request.json
+    
+    symbol = req.get("symbol", "").upper().strip()
+    expiry = req.get("expiry", "").strip()
+    strategy_lot = float(req.get("strategy_lot", 1.0))
+    target_buy = req.get("target_buy")
+    target_sell = req.get("target_sell")
+    exch_seg = req.get("exch_seg", "NFO").upper().strip()
+    legs_count = int(req.get("legs_count", 2))
+    req_legs = req.get("legs", [])
+    
+    if target_buy is not None: target_buy = float(target_buy)
+    if target_sell is not None: target_sell = float(target_sell)
+    
+    if not symbol or not expiry:
+        return jsonify({"status": "error", "message": "Missing required parameters (Symbol, Expiry)"}), 400
+        
+    legs = []
+    if not req_legs:
+        # Create N default blank legs
+        for i in range(legs_count):
+            legs.append({
+                "strike": "",
+                "opt_type": "CE",
+                "expiry": expiry,
+                "action": "BUY" if i % 2 == 0 else "SELL",
+                "lot": 1.0,
+                "token": "",
+                "symbol": "",
+                "lotsize": 1,
+                "exch_seg": exch_seg,
+                "status": "Strike not configured."
+            })
+    else:
+        # Legacy/Modal structured legs parsing
+        for rl in req_legs:
+            strike_raw = rl.get("strike")
+            opt_type = rl.get("opt_type", "CE").upper().strip()
+            leg_expiry = rl.get("expiry") or expiry
+            action = rl.get("action", "BUY").upper().strip()
+            lot = float(rl.get("lot", 1.0))
+            
+            try:
+                strike = int(round(float(strike_raw)))
+            except Exception:
+                return jsonify({"status": "error", "message": f"Invalid leg strike value: '{strike_raw}'"}), 400
+                
+            norm_expiry = normalize_expiry(leg_expiry)
+            
+            contract = lookup_engine.lookup(symbol, norm_expiry, strike, opt_type)
+            if not contract:
+                return jsonify({
+                    "status": "error", 
+                    "message": f"Contract for {symbol} {leg_expiry} {strike} {opt_type} not found in Scrip Master!"
+                }), 400
+                
+            legs.append({
+                "strike": str(strike),
+                "opt_type": opt_type,
+                "expiry": leg_expiry,
+                "action": action,
+                "lot": lot,
+                "token": contract["token"],
+                "symbol": contract["symbol"],
+                "lotsize": contract["lotsize"],
+                "exch_seg": contract.get("exch_seg", "NFO"),
+                "status": "Pending live quotes..."
+            })
+        
+    # Generate unique header ID
+    with state_lock:
+        new_id = str(max([int(k) for k in active_strategies.keys()] + [1000]) + 1)
+        active_strategies[new_id] = {
+            "symbol": symbol,
+            "expiry": expiry,
+            "strategy_lot": strategy_lot,
+            "target_buy": target_buy,
+            "target_sell": target_sell,
+            "trade_action": "",
+            "execute_trigger": "",
+            "buy_diff": None,
+            "sell_diff": None,
+            "status": "Strategy active.",
+            "legs": legs
+        }
+        save_strategies_to_disk()
+        
+    log_message("SUCCESS", f"Added new spread strategy {symbol} ({expiry}) with {len(legs)} legs. Assigned ID: {new_id}")
+    return jsonify({"status": "success", "id": new_id})
+
+@app.route('/api/strategy/update', methods=['POST'])
+def update_strategy():
+    global active_strategies
+    req = request.json
+    
+    h_row = str(req.get("header_row"))
+    field = req.get("field")
+    value = req.get("value")
+    
+    with state_lock:
+        if h_row not in active_strategies:
+            return jsonify({"status": "error", "message": "Strategy ID not found"}), 404
+            
+        strat = active_strategies[h_row]
+        
+        if field == "target_buy":
+            strat["target_buy"] = float(value) if (value is not None and str(value).strip() != "") else None
+        elif field == "target_sell":
+            strat["target_sell"] = float(value) if (value is not None and str(value).strip() != "") else None
+        elif field == "strategy_lot":
+            strat["strategy_lot"] = float(value) if (value is not None and str(value).strip() != "") else 1.0
+        elif field == "trade_action":
+            strat["trade_action"] = str(value).strip().upper()
+        elif field == "execute_trigger":
+            strat["execute_trigger"] = str(value).strip().upper()
+            
+        save_strategies_to_disk()
+        
+    return jsonify({"status": "success"})
+
+@app.route('/api/strategy/leg/update', methods=['POST'])
+def update_leg():
+    global active_strategies
+    req = request.json
+    
+    h_row = str(req.get("header_row"))
+    leg_idx = int(req.get("leg_index"))
+    field = req.get("field")
+    value = req.get("value")
+    
+    with state_lock:
+        if h_row not in active_strategies:
+            return jsonify({"status": "error", "message": "Strategy ID not found"}), 404
+            
+        strat = active_strategies[h_row]
+        if leg_idx < 0 or leg_idx >= len(strat["legs"]):
+            return jsonify({"status": "error", "message": "Leg index out of range"}), 400
+            
+        leg = strat["legs"][leg_idx]
+        
+        if field == "strike":
+            leg["strike"] = str(value).strip()
+        elif field == "opt_type":
+            leg["opt_type"] = str(value).strip().upper()
+        elif field == "expiry":
+            leg["expiry"] = str(value).strip()
+        elif field == "action":
+            leg["action"] = str(value).strip().upper()
+        elif field == "lot":
+            try:
+                leg["lot"] = float(value)
+            except ValueError:
+                leg["lot"] = 1.0
+                
+        # Perform Scrip Master Lookup if strike is present
+        strike_raw = leg.get("strike", "").strip()
+        if strike_raw:
+            try:
+                strike = int(round(float(strike_raw)))
+                norm_expiry = normalize_expiry(leg["expiry"])
+                symbol = strat["symbol"]
+                
+                # Perform lookup
+                contract = lookup_engine.lookup(symbol, norm_expiry, strike, leg["opt_type"])
+                if contract:
+                    leg["token"] = contract["token"]
+                    leg["symbol"] = contract["symbol"]
+                    leg["lotsize"] = contract["lotsize"]
+                    leg["exch_seg"] = contract.get("exch_seg", "NFO")
+                    leg["status"] = "Pending quotes..."
+                else:
+                    leg["token"] = ""
+                    leg["symbol"] = ""
+                    leg["lotsize"] = 1
+                    leg["status"] = f"Contract not found in Scrip Master!"
+            except Exception as e:
+                leg["token"] = ""
+                leg["symbol"] = ""
+                leg["status"] = f"Error: {str(e)}"
+        else:
+            leg["token"] = ""
+            leg["symbol"] = ""
+            leg["status"] = "Strike not configured."
+            
+        save_strategies_to_disk()
+        
+    return jsonify({"status": "success"})
+
+@app.route('/api/strategy/leg/add', methods=['POST'])
+def add_leg():
+    global active_strategies
+    req = request.json
+    
+    h_row = str(req.get("header_row"))
+    
+    with state_lock:
+        if h_row not in active_strategies:
+            return jsonify({"status": "error", "message": "Strategy ID not found"}), 404
+            
+        strat = active_strategies[h_row]
+        exch_seg = "NFO"
+        if strat["legs"]:
+            exch_seg = strat["legs"][0].get("exch_seg", "NFO")
+            
+        strat["legs"].append({
+            "strike": "",
+            "opt_type": "CE",
+            "expiry": strat["expiry"],
+            "action": "BUY" if len(strat["legs"]) % 2 == 0 else "SELL",
+            "lot": 1.0,
+            "token": "",
+            "symbol": "",
+            "lotsize": 1,
+            "exch_seg": exch_seg,
+            "status": "Strike not configured."
+        })
+        save_strategies_to_disk()
+        
+    return jsonify({"status": "success"})
+
+@app.route('/api/strategy/leg/delete', methods=['POST'])
+def delete_leg():
+    global active_strategies
+    req = request.json
+    
+    h_row = str(req.get("header_row"))
+    leg_idx = int(req.get("leg_index"))
+    
+    with state_lock:
+        if h_row not in active_strategies:
+            return jsonify({"status": "error", "message": "Strategy ID not found"}), 404
+            
+        strat = active_strategies[h_row]
+        if leg_idx < 0 or leg_idx >= len(strat["legs"]):
+            return jsonify({"status": "error", "message": "Leg index out of range"}), 400
+            
+        strat["legs"].pop(leg_idx)
+        save_strategies_to_disk()
+        
+    return jsonify({"status": "success"})
+
+@app.route('/api/strategy/delete', methods=['POST'])
+def delete_strategy():
+    global active_strategies
+    req = request.json
+    h_row = str(req.get("header_row"))
+    
+    with state_lock:
+        if h_row in active_strategies:
+            symbol = active_strategies[h_row]["symbol"]
+            del active_strategies[h_row]
+            save_strategies_to_disk()
+            log_message("SUCCESS", f"Deleted Strategy ID: {h_row} ({symbol})")
+            return jsonify({"status": "success"})
+        else:
+            return jsonify({"status": "error", "message": "Strategy ID not found"}), 404
+
+@app.route('/api/logs/clear', methods=['POST'])
+def clear_logs():
+    global app_logs
+    with state_lock:
+        app_logs = []
+    return jsonify({"status": "success"})
+
+# ==========================================
+# 9. MAIN RUNNER & AUTO-LAUNCHER
+# ==========================================
+def launch_web_browser():
+    """Waiting for Flask thread to initialize before launching the web browser."""
+    time.sleep(1.5)
+    log_message("INFO", "Auto-launching local Trade Hub Dashboard in your browser...")
+    webbrowser.open("http://127.0.0.1:5000")
+
+def main():
+    global lookup_engine, unified_broker
+    
+    print("\n" + "="*70)
+    print("  COMMERCIAL MULTI-BROKER OPTIONS TRADE HUB ENGINE RUNNING (PREMIUM DASHBOARD)")
+    print("="*70 + "\n")
+    
+    # Initialize unified broker client
+    unified_broker = UnifiedBrokerClient()
+    
+    # 1. Fast Scrip Master lookup engine initialization
+    lookup_engine = ScripMasterLookup("OpenAPIScripMaster.json")
+    
+    # 2. Local persistence - Load saved strategies
+    load_strategies_from_disk()
+    
+    # 3. Dynamic seed logic if database is clean
+    if not active_strategies:
+        seed_sample_strategies()
+        
+    # 4. Initialize trading loop background thread
+    trading_thread = threading.Thread(target=run_trading_engine_thread, daemon=True)
+    trading_thread.start()
+    
+    # 5. Start browser auto-launcher
+    launcher_thread = threading.Thread(target=launch_web_browser, daemon=True)
+    launcher_thread.start()
+    
+    # 6. Initialize Flask local server
+    log_message("INFO", "Starting Flask application local Web Server on port 5000...")
+    try:
+        app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
+    except OSError as e:
+        if "Address already in use" in str(e) or "10048" in str(e):
+            print("\n" + "="*80)
+            print(" [CRITICAL] PORT 5000 IS ALREADY IN USE BY ANOTHER PROCESS!")
+            print(" Please close any other running python or terminal windows of Trade Hub.")
+            print(" If the error persists, restart your computer or kill zombie python processes.")
+            print("="*80 + "\n")
+            log_message("CRITICAL", "Port 5000 in use. Flask crashed.")
+            sys.exit(1)
+        else:
+            raise e
+
+if __name__ == "__main__":
+    main()

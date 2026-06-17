@@ -1,0 +1,3246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TRADE HUB | Live Options Spread Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #080a10;
+            --bg-gradient: radial-gradient(circle at 50% 0%, #15100a 0%, #080a10 85%);
+            --card-bg: rgba(12, 14, 20, 0.82);
+            --card-border: rgba(184, 96, 43, 0.12);
+            --card-border-glow: rgba(184, 96, 43, 0.45);
+            
+            --text-primary: #f8fafc;
+            --text-secondary: #a3aab5;
+            --text-muted: #575e69;
+            
+            --accent-color: #b8602b;
+            --accent-color-hover: #cf6f34;
+            --accent-glow: rgba(184, 96, 43, 0.35);
+            
+            --success-color: #10b981;
+            --success-bg: rgba(16, 185, 129, 0.06);
+            --success-text: #34d399;
+            
+            --danger-color: #ef4444;
+            --danger-bg: rgba(239, 68, 68, 0.08);
+            --danger-text: #f87171;
+            
+            --orange-color: #b8602b;
+            --orange-bg: rgba(184, 96, 43, 0.08);
+            --orange-text: #fb923c;
+            
+            /* Custom Theme Mapping variables */
+            --badge-buy-bg: #0b3a2f;
+            --badge-buy-border: rgba(16, 185, 129, 0.45);
+            --badge-buy-text: #4ade80;
+            
+            --badge-sell-bg: #4f1d14;
+            --badge-sell-border: rgba(239, 68, 68, 0.45);
+            --badge-sell-text: #fb923c;
+            
+            --console-bg: #010103;
+            --console-text: #4ade80;
+            --console-ts: rgba(74, 222, 128, 0.5);
+            
+            --btn-retro-outline-text: #fb923c;
+            --btn-retro-outline-border: rgba(184, 96, 43, 0.6);
+            --btn-retro-outline-bg-hover: rgba(184, 96, 43, 0.12);
+            
+            --strat-badge-bg: linear-gradient(135deg, #8c431d, #b8602b);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            background-image: var(--bg-gradient);
+            background-attachment: fixed;
+            color: var(--text-primary);
+            font-family: 'Outfit', sans-serif;
+            font-size: 0.78rem;
+            min-height: 100vh;
+            overflow-x: hidden;
+            padding-bottom: 150px; /* space for console */
+        }
+
+        /* Scrollbars styling */
+        ::-webkit-scrollbar {
+            width: 3px;
+            height: 3px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 2px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.12);
+        }
+
+        .glass-panel {
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--card-border);
+            border-radius: 8px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Top Navbar */
+        .navbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 20px;
+            border-bottom: 1px solid var(--card-border);
+            background: rgba(5, 7, 15, 0.9);
+            backdrop-filter: blur(12px);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .brand-logo {
+            width: 20px;
+            height: 20px;
+            background: linear-gradient(135deg, #4f46e5, #8b5cf6);
+            border-radius: 5px;
+            box-shadow: 0 0 8px var(--accent-glow);
+            position: relative;
+        }
+
+        .brand-logo::after {
+            content: '';
+            position: absolute;
+            width: 6px;
+            height: 6px;
+            border: 1.5px solid white;
+            border-top: none;
+            border-right: none;
+            transform: rotate(-45deg);
+            top: 5px;
+            left: 6px;
+        }
+
+        .brand-title {
+            font-size: 0.95rem;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+            background: linear-gradient(to right, #ffffff, #cbd5e1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .brand-sub {
+            font-size: 0.55rem;
+            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            color: white;
+            padding: 1px 3px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .client-info {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.74rem;
+            color: var(--text-secondary);
+            background: rgba(255, 255, 255, 0.02);
+            padding: 3px 8px;
+            border-radius: 15px;
+            border: 1px solid var(--card-border);
+        }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background-color: var(--danger-color);
+            position: relative;
+        }
+
+        .status-dot.connected {
+            background-color: var(--success-color);
+            box-shadow: 0 0 5px var(--success-color);
+        }
+
+        .status-dot.connected::after {
+            content: '';
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background-color: var(--success-color);
+            opacity: 0.5;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 0.5; }
+            100% { transform: scale(2); opacity: 0; }
+        }
+
+        @keyframes pulse-red {
+            0% { box-shadow: 0 0 6px rgba(239, 68, 68, 0.35); }
+            50% { box-shadow: 0 0 16px rgba(239, 68, 68, 0.85); }
+            100% { box-shadow: 0 0 6px rgba(239, 68, 68, 0.35); }
+        }
+
+        .status-text {
+            font-size: 0.7rem;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        /* Layout Container */
+        .container {
+            max-width: 1650px;
+            margin: 15px auto 10px auto;
+            padding: 0 12px;
+        }
+
+        .dashboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .section-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            position: relative;
+            padding-left: 8px;
+        }
+
+        .section-title::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 20%;
+            height: 60%;
+            width: 3px;
+            background: var(--accent-color);
+            border-radius: 1px;
+            box-shadow: 0 0 5px var(--accent-glow);
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        /* Buttons styling */
+        .btn {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 5px;
+            font-size: 0.76rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            border: 1px solid transparent;
+            font-family: inherit;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #8c431d, #b8602b);
+            color: white;
+            box-shadow: 0 1px 5px rgba(184, 96, 43, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-0.5px);
+            background: linear-gradient(135deg, #a54f22, #cf6f34);
+            box-shadow: 0 3px 8px rgba(184, 96, 43, 0.35);
+        }
+
+        .btn-secondary {
+            background: rgba(184, 96, 43, 0.04);
+            color: var(--text-primary);
+            border-color: rgba(184, 96, 43, 0.2);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(184, 96, 43, 0.08);
+            border-color: rgba(184, 96, 43, 0.4);
+            color: white;
+        }
+
+        .btn-danger {
+            background: rgba(239, 68, 68, 0.12);
+            color: var(--danger-text);
+            border-color: rgba(239, 68, 68, 0.25);
+        }
+
+        .btn-danger:hover {
+            background: rgba(239, 68, 68, 0.22);
+            transform: translateY(-0.5px);
+        }
+
+        /* Segment Tabs */
+        .tabs {
+            display: flex;
+            gap: 5px;
+            background: rgba(184, 96, 43, 0.02);
+            padding: 2px;
+            border-radius: 6px;
+            border: 1px solid rgba(184, 96, 43, 0.15);
+            margin-bottom: 12px;
+            max-width: fit-content;
+        }
+
+        .tab {
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 0.76rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.1s ease;
+            color: var(--text-secondary);
+        }
+
+        .tab:hover {
+            color: var(--text-primary);
+        }
+
+        .tab.active {
+            background: rgba(184, 96, 43, 0.15);
+            color: #f8fafc;
+            border: 1px solid rgba(184, 96, 43, 0.35);
+            font-weight: 600;
+        }
+
+        /* Strategy Grid */
+        .strategy-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        /* Strategy Card */
+        .strat-card {
+            padding: 14px 18px;
+            position: relative;
+            background: rgba(12, 14, 20, 0.82) !important; /* Premium distinctive slate background */
+            border: 1px solid rgba(184, 96, 43, 0.12) !important; /* Warm amber card border */
+            border-radius: 8px;
+            transition: all 0.22s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        }
+
+        .strat-card:hover {
+            border-color: rgba(184, 96, 43, 0.45) !important; /* Glowing neon amber border */
+            background: rgba(16, 20, 32, 0.95) !important; /* Slightly lighter/richer background highlight */
+            transform: translateY(-2px) !important; /* Raise card physically */
+            box-shadow: 0 16px 38px rgba(0, 0, 0, 0.7), 0 0 18px rgba(184, 96, 43, 0.18) !important; /* Soft premium neon edge glow */
+        }
+
+        /* Header controls */
+        .strat-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 8px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            flex-wrap: wrap;
+        }
+
+        .strat-meta {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .strat-badge {
+            font-size: 0.85rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #8c431d, #b8602b);
+            color: #f8fafc;
+            padding: 3px 10px;
+            border-radius: 5px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            text-transform: uppercase;
+            box-shadow: 0 2px 6px rgba(184, 96, 43, 0.25);
+        }
+
+        .strat-type-badge {
+            font-size: 0.65rem;
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: inline-flex;
+            align-items: center;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+        }
+        .strat-type-badge.spread {
+            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            color: #ffffff;
+            border-color: rgba(124, 58, 237, 0.45);
+        }
+        .strat-type-badge.delta {
+            background: linear-gradient(135deg, #f97316, #ef4444);
+            color: #ffffff;
+            border-color: rgba(239, 68, 68, 0.45);
+        }
+
+        .strat-info-tag {
+            font-size: 0.72rem;
+            color: var(--text-secondary);
+            background: rgba(255, 255, 255, 0.01);
+            padding: 2px 6px;
+            border-radius: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.02);
+        }
+
+        .strat-info-tag span {
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+
+        .strat-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+
+        .control-label {
+            font-size: 0.58rem;
+            text-transform: uppercase;
+            letter-spacing: 0.2px;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .input-dark {
+            background: rgba(10, 12, 18, 0.95);
+            border: 1px solid rgba(184, 96, 43, 0.45);
+            color: var(--text-primary);
+            padding: 3px 6px;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 0.76rem;
+            outline: none;
+            transition: all 0.15s ease;
+            width: 70px;
+            text-align: center;
+            font-weight: 600;
+        }
+
+        .input-dark:focus {
+            border-color: rgba(184, 96, 43, 0.9);
+            box-shadow: 0 0 8px rgba(184, 96, 43, 0.3);
+            background: rgba(16, 18, 25, 0.98);
+        }
+
+        .select-dark {
+            background: rgba(10, 12, 18, 0.95);
+            border: 1px solid rgba(184, 96, 43, 0.45);
+            color: var(--text-primary);
+            padding: 3px 6px;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 0.76rem;
+            outline: none;
+            transition: all 0.15s ease;
+            cursor: pointer;
+            font-weight: 600;
+            width: 130px;
+        }
+
+        .select-dark:focus {
+            border-color: rgba(184, 96, 43, 0.9);
+            box-shadow: 0 0 8px rgba(184, 96, 43, 0.3);
+        }
+
+        .btn-go {
+            padding: 4px 12px;
+            background: linear-gradient(135deg, #8c431d, #b8602b);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            font-weight: 800;
+            font-size: 0.76rem;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: all 0.15s ease;
+            box-shadow: 0 2px 6px rgba(184, 96, 43, 0.25);
+        }
+
+        .btn-go.active {
+            background: linear-gradient(135deg, #10b981, #047857) !important;
+            color: white;
+            border-color: transparent;
+            box-shadow: 0 0 8px rgba(16, 185, 129, 0.25);
+        }
+
+        .btn-delete-icon {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 3px;
+            border-radius: 4px;
+            transition: all 0.15s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .btn-delete-icon:hover {
+            color: var(--danger-text);
+            background: rgba(239, 68, 68, 0.06);
+        }
+
+        /* Badla Summary Badges */
+        .badla-badges {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .badla-badge {
+            display: flex;
+            flex-direction: column;
+            padding: 3px 8px;
+            border-radius: 5px;
+            border: 1px solid transparent;
+            min-width: 68px;
+            align-items: center;
+        }
+
+        .badla-badge.buy {
+            background: #0b3a2f !important;
+            border: 1px solid rgba(16, 185, 129, 0.45) !important;
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.15);
+        }
+
+        .badla-badge.sell {
+            background: #4f1d14 !important;
+            border: 1px solid rgba(239, 68, 68, 0.45) !important;
+            box-shadow: 0 0 10px rgba(239, 68, 68, 0.15);
+        }
+
+        .badla-badge.buy .badla-label { color: #34d399 !important; font-weight: 700; font-size: 0.62rem; text-transform: uppercase; }
+        .badla-badge.sell .badla-label { color: #f87171 !important; font-weight: 700; font-size: 0.62rem; text-transform: uppercase; }
+
+        .badla-val {
+            font-size: 0.88rem;
+            font-weight: 800;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .badla-badge.buy .badla-val { color: #4ade80 !important; text-shadow: 0 0 5px rgba(74, 222, 128, 0.5); }
+        .badla-badge.sell .badla-val { color: #fb923c !important; text-shadow: 0 0 5px rgba(251, 146, 60, 0.5); }
+
+        /* Legs Table Styling - De-Cluttered minimal layout */
+        .table-container {
+            width: 100%;
+            overflow-x: auto;
+            margin-bottom: 8px;
+            border-radius: 5px;
+            border: 1px solid rgba(255, 255, 255, 0.03);
+            background: rgba(4, 5, 10, 0.1);
+        }
+
+        .legs-table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 0.78rem;
+        }
+
+        .legs-table th {
+            background: rgba(8, 10, 20, 0.8);
+            color: var(--text-secondary);
+            font-weight: 600;
+            padding: 5px 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.2px;
+        }
+
+        .legs-table td {
+            padding: 3px 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+            color: var(--text-primary);
+            font-weight: 500;
+            vertical-align: middle;
+        }
+
+        .legs-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        /* Inline Input Fields inside table rows */
+        .leg-cell-input {
+            background: rgba(10, 12, 18, 0.95);
+            border: 1px solid rgba(184, 96, 43, 0.45);
+            color: white;
+            padding: 3px 6px;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 0.76rem;
+            outline: none;
+            width: 65px;
+            text-align: center;
+            font-weight: 600;
+            transition: all 0.15s ease;
+        }
+
+        .leg-cell-input:focus {
+            border-color: rgba(184, 96, 43, 0.9);
+            box-shadow: 0 0 8px rgba(184, 96, 43, 0.3);
+        }
+
+        .leg-cell-select {
+            background: rgba(10, 12, 18, 0.95);
+            border: 1px solid rgba(184, 96, 43, 0.45);
+            color: white;
+            padding: 3px 6px;
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 0.76rem;
+            outline: none;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.15s ease;
+        }
+
+        .leg-cell-select:focus {
+            border-color: rgba(184, 96, 43, 0.9);
+            box-shadow: 0 0 8px rgba(184, 96, 43, 0.3);
+        }
+
+        .btn-retro-outline {
+            background: rgba(184, 96, 43, 0.03) !important;
+            color: #fb923c !important;
+            border: 1px solid rgba(184, 96, 43, 0.6) !important;
+            padding: 4px 10px;
+            border-radius: 5px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .btn-retro-outline:hover {
+            background: rgba(184, 96, 43, 0.12) !important;
+            border-color: rgba(184, 96, 43, 0.95) !important;
+            color: white !important;
+            box-shadow: 0 0 8px rgba(184, 96, 43, 0.2);
+        }
+
+        .leg-cell-select.ce-pe {
+            width: 46px;
+            text-align: center;
+        }
+
+        .leg-cell-select.action-type {
+            width: 58px;
+            text-align: center;
+        }
+
+        .col-mono {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.76rem;
+        }
+
+        .leg-row-delete {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 4px;
+            transition: color 0.15s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .leg-row-delete:hover {
+            color: var(--danger-text);
+        }
+
+        /* Strategy Footer Log */
+        .strat-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(255, 255, 255, 0.005);
+            padding: 4px 10px;
+            border-radius: 5px;
+            border: 1px solid rgba(255, 255, 255, 0.02);
+            font-size: 0.74rem;
+        }
+
+        .strat-log-msg {
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-weight: 500;
+        }
+
+        .strat-log-icon {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background-color: var(--text-muted);
+        }
+
+        .strat-log-icon.active {
+            background-color: var(--success-color);
+            box-shadow: 0 0 3px var(--success-color);
+        }
+
+        .strat-log-icon.triggered {
+            background-color: #f59e0b;
+            box-shadow: 0 0 3px #f59e0b;
+        }
+
+        .strat-log-icon.error {
+            background-color: var(--danger-color);
+            box-shadow: 0 0 3px var(--danger-color);
+        }
+
+        .last-update-time {
+            font-size: 0.68rem;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* Console styling */
+        .system-console {
+            background: #020204;
+            border-top: 1px solid rgba(255, 255, 255, 0.04);
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 110px;
+            z-index: 90;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 -4px 15px rgba(0, 0, 0, 0.6);
+        }
+
+        .console-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 4px 16px;
+            background: rgba(8, 10, 20, 0.95);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+        }
+
+        .console-title {
+            font-size: 0.68rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .console-body {
+            flex: 1;
+            padding: 6px 16px;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            color: #4ade80; /* Neon Green Text by default */
+            line-height: 1.35;
+            background: #010103;
+            text-shadow: 0 0 4px rgba(74, 222, 128, 0.25);
+        }
+
+        .console-line {
+            margin-bottom: 2px;
+            display: flex;
+            gap: 6px;
+        }
+
+        .console-ts {
+            color: rgba(74, 222, 128, 0.5); /* Semi-transparent neon green timestamp */
+            flex-shrink: 0;
+        }
+
+        .console-text.error { color: #ef4444; text-shadow: 0 0 4px rgba(239, 68, 68, 0.4); }
+        .console-text.success { color: #22c55e; text-shadow: 0 0 4px rgba(34, 197, 94, 0.4); }
+        .console-text.warning { color: #eab308; text-shadow: 0 0 4px rgba(234, 179, 8, 0.4); }
+        .console-text.info { color: #38bdf8; text-shadow: 0 0 4px rgba(56, 189, 248, 0.4); }
+
+        /* Modal styling */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(2, 3, 5, 0.85);
+            backdrop-filter: blur(3px);
+            z-index: 200;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.15s ease;
+        }
+
+        .modal-overlay.show {
+            display: flex;
+            opacity: 1;
+        }
+
+        .modal-container {
+            width: 380px;
+            max-width: 90%;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            background: #0a0b12;
+            padding: 16px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+            transform: scale(0.97);
+            transition: transform 0.15s ease;
+        }
+
+        .modal-overlay.show .modal-container {
+            transform: scale(1);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .modal-title {
+            font-size: 0.92rem;
+            font-weight: 700;
+            color: white;
+        }
+
+        .modal-close {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.15rem;
+            cursor: pointer;
+            padding: 2px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            margin-bottom: 10px;
+        }
+
+        .form-label {
+            font-size: 0.62rem;
+            font-weight: bold;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.2px;
+        }
+
+        .form-input {
+            background: rgba(4, 5, 10, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 5px;
+            padding: 6px 10px;
+            color: white;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.15s ease;
+            font-size: 0.78rem;
+        }
+
+        .form-input:focus {
+            border-color: var(--accent-color);
+            background: rgba(4, 5, 10, 0.85);
+            box-shadow: 0 0 5px var(--accent-glow);
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 6px;
+            margin-top: 15px;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            padding-top: 10px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 30px;
+            background: rgba(0, 0, 0, 0.002);
+            border-radius: 8px;
+            border: 1.5px dashed rgba(0, 0, 0, 0.06);
+            color: var(--text-secondary);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .empty-state-title {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .icon {
+            width: 12px;
+            height: 12px;
+            stroke-width: 2;
+            fill: none;
+            stroke: currentColor;
+        }
+
+        /* SaaS Onboarding Full-Screen Page Style */
+        .auth-screen {
+            display: flex;
+            min-height: 100vh;
+            width: 100%;
+            align-items: center;
+            justify-content: center;
+            background-color: var(--bg-color);
+            background-image: var(--bg-gradient);
+            padding: 20px 10px;
+            z-index: 1000;
+            position: relative;
+        }
+
+        .auth-card {
+            width: 480px;
+            max-width: 100%;
+            border-radius: 12px;
+            padding: 35px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.75);
+            border: 1px solid var(--card-border);
+            background: var(--card-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            animation: fadeIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        /* Step Progress Tracker Styles */
+        .auth-steps-progress {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 25px;
+            padding: 0 10px;
+        }
+        .progress-step {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            position: relative;
+            z-index: 2;
+        }
+        .step-num {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1.5px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-secondary);
+            font-size: 0.7rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.25s ease;
+        }
+        .step-label {
+            font-size: 0.58rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.2px;
+            transition: all 0.25s ease;
+        }
+        .progress-line {
+            flex: 1;
+            height: 2px;
+            background: rgba(255, 255, 255, 0.08);
+            margin: 0 8px;
+            transform: translateY(-9px);
+            z-index: 1;
+            transition: all 0.25s ease;
+        }
+        
+        .progress-step.active .step-num {
+            background: rgba(79, 70, 229, 0.2);
+            border-color: var(--accent-color);
+            color: white;
+            box-shadow: 0 0 10px var(--accent-glow);
+        }
+        .progress-step.active .step-label {
+            color: var(--text-primary);
+        }
+        
+        .progress-step.completed .step-num {
+            background: var(--success-bg);
+            border-color: var(--success-color);
+            color: var(--success-text);
+        }
+        .progress-step.completed .step-label {
+            color: var(--success-text);
+        }
+        .progress-line.active {
+            background: var(--accent-color);
+            box-shadow: 0 0 5px var(--accent-glow);
+        }
+
+        .broker-cards {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+            margin-bottom: 25px;
+            margin-top: 10px;
+        }
+
+        .broker-card {
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            background: rgba(255, 255, 255, 0.01);
+            border-radius: 12px;
+            padding: 20px 10px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .broker-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.03) 0%, transparent 70%);
+            opacity: 0;
+            transition: opacity 0.25s ease;
+        }
+
+        .broker-card:hover {
+            transform: translateY(-3px);
+            background: rgba(255, 255, 255, 0.03);
+            border-color: rgba(255, 255, 255, 0.12);
+        }
+        
+        .broker-card:hover::before {
+            opacity: 1;
+        }
+
+        .broker-card#bcard-angel.selected {
+            background: rgba(79, 70, 229, 0.06);
+            border-color: #4f46e5;
+            box-shadow: 0 0 15px rgba(79, 70, 229, 0.25);
+        }
+        .broker-card#bcard-zerodha.selected {
+            background: rgba(249, 115, 22, 0.06);
+            border-color: #f97316;
+            box-shadow: 0 0 15px rgba(249, 115, 22, 0.25);
+        }
+        .broker-card#bcard-fyers.selected {
+            background: rgba(16, 185, 129, 0.06);
+            border-color: #10b981;
+            box-shadow: 0 0 15px rgba(16, 185, 129, 0.25);
+        }
+        .broker-card#bcard-groww.selected {
+            background: rgba(0, 208, 156, 0.06);
+            border-color: #00d09c;
+            box-shadow: 0 0 15px rgba(0, 208, 156, 0.25);
+        }
+
+        .broker-logo {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 0.9rem;
+            color: white;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+            transition: transform 0.25s ease;
+        }
+        
+        .broker-card:hover .broker-logo {
+            transform: scale(1.08);
+        }
+
+        .logo-angel { background: linear-gradient(135deg, #4f46e5, #3730a3); }
+        .logo-zerodha { background: linear-gradient(135deg, #f97316, #ea580c); }
+        .logo-fyers { background: linear-gradient(135deg, #10b981, #059669); }
+        .logo-groww { background: linear-gradient(135deg, #00d09c, #0d9488); }
+
+        .broker-name {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            transition: color 0.25s ease;
+        }
+
+        .auth-step {
+            display: none;
+        }
+
+        .auth-step.active {
+            display: block;
+        }
+        
+        .broker-fields {
+            animation: fadeIn 0.25s ease;
+        }
+
+        @keyframes fadeIn {
+            0% { opacity: 0; transform: translateY(8px); }
+            100% { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Glowing Premium Connection Status Banner */
+        .connection-banner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 18px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-size: 0.82rem;
+            font-weight: 500;
+            border: 1px solid transparent;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+            animation: fadeIn 0.35s ease;
+        }
+        .connection-banner.real {
+            background: rgba(11, 58, 47, 0.8) !important;
+            border-color: rgba(16, 185, 129, 0.5) !important;
+            color: #f8fafc;
+            box-shadow: 0 0 15px rgba(16, 185, 129, 0.15);
+        }
+        .connection-banner.demo {
+            background: rgba(79, 29, 20, 0.8) !important;
+            border-color: rgba(249, 115, 22, 0.5) !important;
+            color: #f8fafc;
+            box-shadow: 0 0 15px rgba(249, 115, 22, 0.15);
+        }
+        .banner-badge {
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.68rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            margin-right: 10px;
+        }
+        .connection-banner.real .banner-badge {
+            background: #10b981;
+            color: white;
+            box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+        }
+        .connection-banner.demo .banner-badge {
+            background: #f97316;
+            color: white;
+            box-shadow: 0 0 8px rgba(249, 115, 22, 0.4);
+        }
+        .banner-text {
+            flex: 1;
+            line-height: 1.4;
+        }
+        .banner-pulse {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 6px;
+            position: relative;
+            vertical-align: middle;
+        }
+        .connection-banner.real .banner-pulse {
+            background: #34d399;
+            box-shadow: 0 0 8px #34d399;
+        }
+        .connection-banner.demo .banner-pulse {
+            background: #fb923c;
+            box-shadow: 0 0 8px #fb923c;
+        }
+
+        /* Funds & Margin Summary Card */
+        .funds-card {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 18px;
+            border-radius: 8px;
+            background: rgba(12, 14, 20, 0.82);
+            border: 1px solid var(--card-border);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+            transition: all 0.25s ease;
+        }
+        .funds-card:hover {
+            border-color: var(--accent-color);
+            box-shadow: 0 4px 20px var(--accent-glow);
+        }
+        .funds-metric {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            flex: 1;
+            border-right: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .funds-metric:last-child {
+            border-right: none;
+        }
+        .funds-label {
+            font-size: 0.58rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        .funds-value {
+            font-size: 0.95rem;
+            font-weight: 800;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-primary);
+        }
+        .funds-value.available {
+            color: #34d399;
+            text-shadow: 0 0 5px rgba(52, 211, 153, 0.2);
+        }
+        .funds-value.used {
+            color: #fb923c;
+            text-shadow: 0 0 5px rgba(251, 146, 60, 0.2);
+        }
+        .funds-value.pnl-profit {
+            color: #34d399;
+            text-shadow: 0 0 5px rgba(52, 211, 153, 0.2);
+        }
+        .funds-value.pnl-loss {
+            color: #f87171;
+            text-shadow: 0 0 5px rgba(248, 113, 113, 0.2);
+        }
+
+        /* Floating Theme Switcher Button */
+        .floating-theme-btn {
+            position: fixed;
+            right: 20px;
+            bottom: 130px; /* above the system console */
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent-color), var(--accent-color-hover, #cf6f34));
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            font-size: 1.25rem;
+            cursor: pointer;
+            z-index: 150;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 16px var(--accent-glow);
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .floating-theme-btn:hover {
+            transform: scale(1.1) rotate(15deg);
+            box-shadow: 0 6px 20px var(--accent-glow);
+        }
+
+        /* Theme Drawer Styles */
+        .theme-drawer {
+            position: fixed;
+            top: 0;
+            right: -300px;
+            width: 280px;
+            height: 100vh;
+            background: rgba(10, 11, 16, 0.95);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: -10px 0 30px rgba(0, 0, 0, 0.6);
+            z-index: 500;
+            transition: right 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .theme-drawer.show {
+            right: 0;
+        }
+
+        .theme-drawer-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            padding-bottom: 10px;
+        }
+
+        .theme-drawer-header h3 {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: #f8fafc;
+            letter-spacing: 0.5px;
+        }
+
+        .theme-drawer-close {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.3rem;
+            cursor: pointer;
+        }
+
+        .theme-options {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 10px;
+        }
+
+        .theme-option {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.03);
+            background: rgba(255, 255, 255, 0.01);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .theme-option:hover {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: rgba(255, 255, 255, 0.08);
+            transform: translateX(-2px);
+        }
+
+        .theme-option.active {
+            border-color: var(--accent-color) !important;
+            box-shadow: 0 0 12px var(--accent-glow) !important;
+            background: rgba(255, 255, 255, 0.05) !important;
+        }
+
+        .theme-preview {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            border: 1.5px solid rgba(255, 255, 255, 0.25);
+            flex-shrink: 0;
+        }
+
+        .theme-name {
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: #e2e8f0;
+        }
+
+        .theme-drawer-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(1.5px);
+            z-index: 490;
+            display: none;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .theme-drawer-overlay.show {
+            display: block;
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Floating Theme Switcher Button -->
+    <button class="floating-theme-btn" onclick="toggleThemeDrawer()" title="Switch Vibe Theme">
+        🎨
+    </button>
+
+    <!-- Sliding Theme Drawer Panel -->
+    <div class="theme-drawer" id="theme-drawer">
+        <div class="theme-drawer-header">
+            <h3>Select Vibe Theme</h3>
+            <button class="theme-drawer-close" onclick="toggleThemeDrawer()">&times;</button>
+        </div>
+        <div class="theme-options">
+            <div class="theme-option active" id="theme-opt-retro" onclick="selectTheme('retro')">
+                <div class="theme-preview" style="background: radial-gradient(circle, #b8602b 10%, #0c0e14 90%);"></div>
+                <div class="theme-name">Retro Tech (Amber)</div>
+            </div>
+            <div class="theme-option" id="theme-opt-obsidian" onclick="selectTheme('obsidian')">
+                <div class="theme-preview" style="background: radial-gradient(circle, #6366f1 10%, #05060b 90%);"></div>
+                <div class="theme-name">Obsidian Pro (Indigo)</div>
+            </div>
+            <div class="theme-option" id="theme-opt-emerald" onclick="selectTheme('emerald')">
+                <div class="theme-preview" style="background: radial-gradient(circle, #10b981 10%, #030705 90%);"></div>
+                <div class="theme-name">Emerald Cyber (Green)</div>
+            </div>
+            <div class="theme-option" id="theme-opt-glacier" onclick="selectTheme('glacier')">
+                <div class="theme-preview" style="background: radial-gradient(circle, #0ea5e9 10%, #020617 90%);"></div>
+                <div class="theme-name">Glacier Oceanic (Blue)</div>
+            </div>
+            <div class="theme-option" id="theme-opt-cyberpunk" onclick="selectTheme('cyberpunk')">
+                <div class="theme-preview" style="background: radial-gradient(circle, #d946ef 10%, #08020f 90%);"></div>
+                <div class="theme-name">Cyber Synth (Pink)</div>
+            </div>
+        </div>
+    </div>
+    <!-- Drawer Overlay -->
+    <div class="theme-drawer-overlay" id="theme-drawer-overlay" onclick="toggleThemeDrawer()"></div>
+
+    <!-- Dedicated SaaS Onboarding Full-Screen Page -->
+    <div class="auth-screen" id="auth-screen" style="display: none;">
+        <div class="auth-card glass-panel">
+            <div style="text-align: center; margin-bottom: 25px;">
+                <div class="brand-logo" style="width: 32px; height: 32px; margin: 0 auto 10px auto; border-radius: 8px;"></div>
+                <h2 style="font-size: 1.3rem; font-weight: 800; background: linear-gradient(to right, #ffffff, #cbd5e1); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">TRADE HUB PRO</h2>
+                <p style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px;">White-Label Multi-Broker SaaS</p>
+            </div>
+
+            <!-- Visual Onboarding Progress bar -->
+            <div class="auth-steps-progress">
+                <div class="progress-step active" id="pstep-1">
+                    <span class="step-num">1</span>
+                    <span class="step-label">Info</span>
+                </div>
+                <div class="progress-line" id="pline-1"></div>
+                <div class="progress-step" id="pstep-2">
+                    <span class="step-num">2</span>
+                    <span class="step-label">Broker</span>
+                </div>
+                <div class="progress-line" id="pline-2"></div>
+                <div class="progress-step" id="pstep-3">
+                    <span class="step-num">3</span>
+                    <span class="step-label">API Keys</span>
+                </div>
+                <div class="progress-line" id="pline-3"></div>
+                <div class="progress-step" id="pstep-4">
+                    <span class="step-num">4</span>
+                    <span class="step-label">OTP</span>
+                </div>
+            </div>
+
+            <!-- Step 1: Client Information -->
+            <div class="auth-step active" id="auth-step-1">
+                <h3 style="font-size: 0.95rem; font-weight: 700; margin-bottom: 12px; color: var(--text-primary); border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-bottom: 6px;">Step 1: Client Registration</h3>
+                <div class="form-group">
+                    <label class="form-label">Client Name</label>
+                    <input type="text" class="form-input" id="auth-client-name" placeholder="e.g. Hannan Options Trader" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Email Address</label>
+                    <input type="email" class="form-input" id="auth-client-email" placeholder="e.g. client@example.com" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Mobile Number</label>
+                    <input type="text" class="form-input" id="auth-client-mobile" placeholder="e.g. +91 98765 43210" required>
+                </div>
+                <button type="button" class="btn btn-primary" style="width: 100%; margin-top: 20px; padding: 10px; justify-content: center; font-size: 0.8rem;" onclick="goToAuthStep(2)">
+                    Next: Select Broker
+                </button>
+            </div>
+
+            <!-- Step 2: Broker Card Selection -->
+            <div class="auth-step" id="auth-step-2">
+                <h3 style="font-size: 0.95rem; font-weight: 700; margin-bottom: 12px; color: var(--text-primary); border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-bottom: 6px;">Step 2: Choose Broker API</h3>
+                
+                <div class="broker-cards">
+                    <div class="broker-card selected" id="bcard-angel" onclick="selectBrokerCard('ANGEL_ONE')">
+                        <div class="broker-logo logo-angel">A1</div>
+                        <span class="broker-name">Angel One</span>
+                    </div>
+                    <div class="broker-card" id="bcard-zerodha" onclick="selectBrokerCard('ZERODHA')">
+                        <div class="broker-logo logo-zerodha">ZK</div>
+                        <span class="broker-name">Zerodha Kite</span>
+                    </div>
+                    <div class="broker-card" id="bcard-fyers" onclick="selectBrokerCard('FYERS')">
+                        <div class="broker-logo logo-fyers">FY</div>
+                        <span class="broker-name">Fyers API</span>
+                    </div>
+                    <div class="broker-card" id="bcard-groww" onclick="selectBrokerCard('GROWW')">
+                        <div class="broker-logo logo-groww">GR</div>
+                        <span class="broker-name">Groww</span>
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 12px; margin-top: 20px;">
+                    <button type="button" class="btn btn-secondary" style="flex: 1; padding: 10px; justify-content: center; font-size: 0.8rem;" onclick="goToAuthStep(1)">Back</button>
+                    <button type="button" class="btn btn-primary" style="flex: 2; padding: 10px; justify-content: center; font-size: 0.8rem;" onclick="goToAuthStep(3)">
+                        Next: Enter Credentials
+                    </button>
+                </div>
+            </div>
+
+            <!-- Step 3: Broker Credentials Form Entry -->
+            <div class="auth-step" id="auth-step-3">
+                <h3 style="font-size: 0.95rem; font-weight: 700; margin-bottom: 15px; color: var(--text-primary); border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-bottom: 6px;" id="credentials-title">Step 3: Connect Angel One</h3>
+                
+                <!-- Angel One Credentials -->
+                <div id="fields-angel" class="broker-fields">
+                    <p style="font-size: 0.72rem; color: var(--success-text); margin-bottom: 12px; font-weight: 500;">
+                        🟢 <strong>LIVE PRODUCTION ACTIVE:</strong> Supports 100% real-time exchange rates and live trades on your real Angel One trading account.
+                    </p>
+                    <div class="form-group">
+                        <label class="form-label">Angel One API Key</label>
+                        <input type="text" class="form-input" id="cr-angel-key" placeholder="Enter Angel One API Key">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Client Code / User ID</label>
+                        <input type="text" class="form-input" id="cr-angel-code" placeholder="e.g. M163733">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">MPIN (4 or 6 digit PIN)</label>
+                        <input type="password" class="form-input" id="cr-angel-pwd" placeholder="Enter MPIN (e.g. 1234)">
+                    </div>
+                </div>
+
+                <!-- Zerodha Credentials -->
+                <div id="fields-zerodha" class="broker-fields" style="display: none;">
+                    <p style="font-size: 0.72rem; color: var(--success-text); margin-bottom: 12px; font-weight: 500;">
+                        🟢 <strong>LIVE PRODUCTION ACTIVE:</strong> Real-time authentication via Zerodha Kite. Your TOTP from Google Authenticator will be used to complete login.
+                    </p>
+                    <div class="form-group">
+                        <label class="form-label">Kite API Key</label>
+                        <input type="text" class="form-input" id="cr-zerodha-key" placeholder="Enter Kite API Key">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Zerodha User ID</label>
+                        <input type="text" class="form-input" id="cr-zerodha-code" placeholder="e.g. XX1234">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Kite Login Password</label>
+                        <input type="password" class="form-input" id="cr-zerodha-pwd" placeholder="Enter your Zerodha login password">
+                    </div>
+                </div>
+
+                <!-- Fyers Credentials -->
+                <div id="fields-fyers" class="broker-fields" style="display: none;">
+                    <p style="font-size: 0.72rem; color: var(--success-text); margin-bottom: 12px; font-weight: 500;">
+                        🟢 <strong>LIVE PRODUCTION ACTIVE:</strong> Real-time programmatic authentication via Fyers API v3. An OTP will be sent to your registered mobile number.
+                    </p>
+                    <div class="form-group">
+                        <label class="form-label">Fyers App ID (API Key) <span style="color: #f59e0b;">*</span></label>
+                        <input type="text" class="form-input" id="cr-fyers-key" placeholder="e.g. XY12345-100">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Fyers App Secret (API Secret Key) <span style="color: #f59e0b;">*</span></label>
+                        <input type="password" class="form-input" id="cr-fyers-secret" placeholder="Enter your Fyers App Secret Key">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Fyers Client ID (Username)</label>
+                        <input type="text" class="form-input" id="cr-fyers-code" placeholder="e.g. FY12345">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Fyers MPIN (4-6 digit PIN)</label>
+                        <input type="password" class="form-input" id="cr-fyers-pwd" placeholder="Enter your Fyers MPIN">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Fyers Redirect URL (Optional)</label>
+                        <input type="text" class="form-input" id="cr-fyers-redirect" placeholder="Default: https://trade.fyers.in/api-login/redirect-uri/index.html">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Fyers TOTP Secret Key (Optional)</label>
+                        <input type="text" class="form-input" id="cr-fyers-totp" placeholder="Enter to automatically generate TOTP codes">
+                    </div>
+                </div>
+
+                <!-- Groww Credentials -->
+                <div id="fields-groww" class="broker-fields" style="display: none;">
+                    <p style="font-size: 0.72rem; color: var(--success-text); margin-bottom: 12px; font-weight: 500;">
+                        🟢 <strong>LIVE PRODUCTION ACTIVE:</strong> Real-time authentication via Groww Broker API. Enter your Groww API credentials below.
+                    </p>
+                    <div class="form-group">
+                        <label class="form-label">Groww App Key (API Key)</label>
+                        <input type="text" class="form-input" id="cr-groww-key" placeholder="Enter Groww App Key">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Client Code / Email ID</label>
+                        <input type="text" class="form-input" id="cr-groww-code" placeholder="e.g. client@email.com or GROWW123">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Login Password</label>
+                        <input type="password" class="form-input" id="cr-groww-pwd" placeholder="Enter your Groww password">
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 12px; margin-top: 20px;">
+                    <button type="button" class="btn btn-secondary" style="flex: 1; padding: 10px; justify-content: center; font-size: 0.8rem;" onclick="goToAuthStep(2)">Back</button>
+                    <button type="button" class="btn btn-primary" id="btn-broker-connect" style="flex: 2; padding: 10px; justify-content: center; font-size: 0.8rem;" onclick="submitBrokerRegistration()">
+                        Authenticate & Connect
+                    </button>
+                </div>
+            </div>
+
+            <!-- Step 4: Real MFA/OTP verification -->
+            <div class="auth-step" id="auth-step-4">
+                <h3 style="font-size: 0.95rem; font-weight: 700; margin-bottom: 12px; color: var(--text-primary); border-bottom: 1px solid rgba(255, 255, 255, 0.05); padding-bottom: 6px;">Step 4: Verification</h3>
+                <p id="otp-step-description" style="color: var(--text-secondary); font-size: 0.74rem; margin-bottom: 15px; line-height: 1.6;">
+                    Enter the 6-digit OTP or TOTP code to complete authentication.
+                </p>
+                <div class="form-group" style="margin-top: 15px;">
+                    <label class="form-label" id="otp-input-label" style="text-align: center; display: block; margin-bottom: 8px;">OTP / TOTP Code</label>
+                    <input type="text" class="form-input" id="auth-otp-input" placeholder="Enter 6-digit code" maxlength="6" inputmode="numeric" style="font-size: 1.2rem; font-weight: bold; letter-spacing: 4px; text-align: center; color: white; background: rgba(0, 0, 0, 0.35); border-color: rgba(255, 255, 255, 0.1); padding: 10px;" oninput="this.value = this.value.replace(/[^0-9]/g, '')">
+                </div>
+                <div style="display: flex; gap: 12px; margin-top: 25px;">
+                    <button type="button" class="btn btn-secondary" style="flex: 1; padding: 10px; justify-content: center; font-size: 0.8rem;" onclick="goToAuthStep(3)">Back</button>
+                    <button type="button" class="btn btn-primary" id="btn-otp-verify" style="flex: 2; padding: 10px; justify-content: center; font-size: 0.8rem;" onclick="submitOTPVerification()">
+                        Verify &amp; Launch Software
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App Screen Container (Completely separated!) -->
+    <div id="app-screen" style="display: none;">
+        <!-- Header Navbar -->
+        <header class="navbar">
+            <div class="brand">
+                <div class="brand-logo"></div>
+                <div>
+                    <h1 class="brand-title">TRADE HUB</h1>
+                    <p style="font-size: 0.54rem; color: var(--text-muted); font-weight: bold; letter-spacing: 0.2px;">LIVE OPTIONS DIFF ENGINE</p>
+                </div>
+                <span class="brand-sub">PRO</span>
+            </div>
+
+            <div id="navbar-theme-label" style="font-size: 1.15rem; font-weight: 800; color: #82dfa5; text-shadow: 0 0 12px rgba(130, 223, 165, 0.6); font-family: 'Outfit', sans-serif; letter-spacing: 1px; transition: all 0.3s ease;">Retro Tech Theme</div>
+
+            <div class="connection-status">
+                <button id="btn-engine-toggle" class="btn btn-primary" style="font-weight: 800; font-size: 0.78rem;" onclick="toggleEngine()">
+                    ▶️ Start Engine
+                </button>
+                
+                <button class="btn btn-danger" style="box-shadow: 0 0 6px rgba(239, 68, 68, 0.35); font-weight: 800; font-size: 0.78rem; border-color: rgba(239, 68, 68, 0.4);" onclick="triggerPanicStop()">
+                    🚨 EMERGENCY STOP
+                </button>
+                
+                <button class="btn btn-secondary" style="font-size: 0.72rem; border-color: rgba(0, 0, 0, 0.08); font-weight: 600;" onclick="triggerLogout()">
+                    ⚙️ Setup / Logout
+                </button>
+
+                <div class="client-info">
+                    <svg class="icon" viewBox="0 0 24 24" style="width: 11px; height: 11px;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                    <span id="client-name">Loading Profile...</span>
+                    <span id="client-code" style="color: var(--accent-color); font-weight: bold; font-family: monospace;">(----)</span>
+                </div>
+                
+                <div class="client-info" style="gap: 5px;">
+                    <span id="client-broker" style="color: #f8fafc; font-weight: 800; font-size: 0.65rem; background: var(--accent-color); padding: 1px 5px; border-radius: 4px; text-transform: uppercase;">NONE</span>
+                    <span class="status-dot" id="status-dot"></span>
+                    <span class="status-text" id="status-text">DISCONNECTED</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Container -->
+        <main class="container">
+            
+            <div id="top-status-area" style="display: none; grid-template-columns: 2fr 1.2fr; gap: 12px; margin-bottom: 12px;">
+                <div id="connection-banner-container"></div>
+                <div id="funds-summary-container"></div>
+            </div>
+            
+            <div class="dashboard-header">
+                <div>
+                    <h2 class="section-title">Spread Strategies Dashboard</h2>
+                    <p style="color: var(--text-secondary); font-size: 0.72rem; margin-top: 2px;">Configure option leg strikes live and monitor real-time badla differences.</p>
+                </div>
+                <div class="action-buttons">
+                    <button class="btn btn-secondary" onclick="clearAllLogs()">
+                        <svg class="icon" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0 1 16.138 21H7.862a2 2 0 0 1-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v3M4 7h16"></path></svg>
+                        Clear Terminal
+                    </button>
+                    <button class="btn btn-primary" onclick="openAddModal()">
+                        <svg class="icon" viewBox="0 0 24 24" style="stroke: white;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                        Add Strategy
+                    </button>
+                </div>
+            </div>
+
+            <!-- Strategy Segment tabs -->
+            <div class="tabs">
+                <div class="tab active" id="tab-nfo" onclick="switchSegment('NFO')">NFO Options (Equity & Index)</div>
+                <div class="tab" id="tab-mcx" onclick="switchSegment('MCX')">MCX Commodity Options</div>
+            </div>
+
+            <!-- Strategy List Grid -->
+            <section class="strategy-grid" id="strategies-list">
+                <div class="empty-state">
+                    <div class="empty-state-title">Loading Strategies...</div>
+                    <div class="empty-state-text">Fetching configured strategies from backend engine. Please wait.</div>
+                </div>
+            </section>
+            
+            <!-- Positions & Orders Panel Removed to prevent hanging issues -->
+
+        </main>
+
+        <!-- Bottom System Terminal Console -->
+        <footer class="system-console" id="terminal-console">
+            <div class="console-header">
+                <div class="console-title">
+                    <svg class="icon" viewBox="0 0 24 24" style="width: 11px; height: 11px;"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+                    Real-Time Trading Engine Console Log
+                </div>
+                <div class="last-update-time" id="engine-status-time">Last update: --:--:--</div>
+            </div>
+            <div class="console-body" id="console-logs">
+                <div class="console-line">
+                    <span class="console-ts">[--:--:--]</span>
+                    <span class="console-text info">System console initialized. Waiting for streaming packets...</span>
+                </div>
+            </div>
+        </footer>
+
+        <!-- Simplified Add Strategy Modal -->
+        <div class="modal-overlay" id="add-modal">
+            <div class="modal-container glass-panel">
+                <div class="modal-header">
+                    <h3 class="modal-title">Create Strategy Position</h3>
+                    <button class="modal-close" onclick="closeAddModal()">&times;</button>
+                </div>
+                
+                <form id="strategy-form" onsubmit="submitStrategyForm(event)">
+                    <div class="form-group">
+                        <label class="form-label">Strategy Symbol / Stock Name</label>
+                        <input type="text" class="form-input" id="form-symbol" placeholder="e.g. DLF, NIFTY, GOLD" required oninput="handleSymbolChange(this.value)" list="symbol-list">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Strategy Type</label>
+                        <select class="form-input" id="form-strategy-type" onchange="handleTypeChange(this.value)">
+                            <option value="SPREAD">SPREAD (Multi-leg Options)</option>
+                            <option value="DELTA">DELTA (Single-leg Option/Future)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Exchange Segment</label>
+                        <select class="form-input" id="form-segment" onchange="handleSegmentChange(this.value)">
+                            <option value="NFO">NFO (Equity & Index Options)</option>
+                            <option value="MCX">MCX (Commodity Options)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Default Expiry</label>
+                        <input type="text" class="form-input" id="form-expiry" placeholder="e.g. 25-Jun-2026 or 25aug206" required list="expiry-list">
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                        <div class="form-group">
+                            <label class="form-label">Strategy Multiplier (Lot)</label>
+                            <input type="number" class="form-input" id="form-multiplier" value="1" min="1" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Number of Legs</label>
+                            <input type="number" class="form-input" id="form-legs-count" value="2" min="1" max="6" required>
+                        </div>
+                    </div>
+
+                    <div class="modal-actions">
+                        <button type="button" class="btn btn-secondary" onclick="closeAddModal()">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Initialize Strategy</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div> </div>
+
+    <!-- Core Interactive Javascript -->
+    <script>
+        let currentSegment = 'NFO'; // NFO or MCX
+        let nfoExpiries = [];
+        let mcxExpiries = [];
+        let nfoSymbols = [];
+        let mcxSymbols = [];
+        let activeStrategies = {};
+        let lastStrategyKeys = []; // Array of active IDs rendered to detect additions/deletions
+
+        // Load active state from backend every 1 second
+        async function fetchAppState() {
+            try {
+                const response = await fetch('/api/state');
+                if (!response.ok) throw new Error('API server unreachable');
+                
+                const data = await response.json();
+                
+                // Update client and connection details
+                document.getElementById('client-name').innerText = data.profile_name || 'Not Logged In';
+                document.getElementById('client-code').innerText = data.client_code ? `(${data.client_code})` : '(----)';
+                
+                // Update engine status button dynamically
+                const engineToggleBtn = document.getElementById('btn-engine-toggle');
+                if (engineToggleBtn) {
+                    if (data.engine_running) {
+                        engineToggleBtn.innerText = '⏸️ Stop Engine';
+                        engineToggleBtn.className = 'btn btn-secondary';
+                        engineToggleBtn.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+                        engineToggleBtn.style.color = '#f87171';
+                    } else {
+                        engineToggleBtn.innerText = '▶️ Start Engine';
+                        engineToggleBtn.className = 'btn btn-primary';
+                        engineToggleBtn.style.borderColor = '';
+                        engineToggleBtn.style.color = '';
+                    }
+                }
+                
+                // Update active broker and dynamic theme
+                const brokerBadge = document.getElementById('client-broker');
+                if (brokerBadge) {
+                    const activeBroker = data.broker || 'NONE';
+                    brokerBadge.innerText = activeBroker;
+                    applyBrokerTheme(activeBroker);
+                }
+                
+                const statusDot = document.getElementById('status-dot');
+                const statusText = document.getElementById('status-text');
+                if (data.connected) {
+                    statusDot.className = 'status-dot connected';
+                    statusText.innerText = 'Connected';
+                    statusText.style.color = 'var(--success-color)';
+                } else {
+                    statusDot.className = 'status-dot';
+                    statusText.innerText = 'Disconnected';
+                    statusText.style.color = 'var(--danger-color)';
+                }
+
+                // Render Connection Mode Banner and Funds
+                const topStatusArea = document.getElementById('top-status-area');
+                const bannerContainer = document.getElementById('connection-banner-container');
+                const fundsContainer = document.getElementById('funds-summary-container');
+                
+                if (topStatusArea && bannerContainer && fundsContainer) {
+                    if (data.connected) {
+                        topStatusArea.style.display = 'grid';
+                        
+                        const brokerName = data.broker || 'Unknown';
+                        const clientCode = data.client_code || '----';
+                        const isReal = data.mode === 'REAL';
+                        const bannerKey = `${brokerName}_${clientCode}_${isReal}`;
+                        
+                        if (bannerContainer.dataset.bannerKey !== bannerKey) {
+                            let bannerHtml = '';
+                            if (isReal) {
+                                bannerHtml = `
+                                    <div class="connection-banner real" style="height: 100%; margin-bottom: 0;">
+                                        <div>
+                                            <span class="banner-badge"><span class="banner-pulse"></span>LIVE ACTIVE</span>
+                                        </div>
+                                        <div class="banner-text">
+                                            Connected to <strong>${brokerName}</strong> in <strong>Real-Time Live Exchange Mode</strong> (Client ID: <code>${clientCode}</code>). All options spread data streams and order execution trades are running live on the exchange.
+                                        </div>
+                                        <div style="font-size: 0.72rem; color: var(--text-secondary); margin-left: 10px;">
+                                            Mode: <span style="color: var(--success-text); font-weight: bold;">REAL-TIME</span>
+                                        </div>
+                                    </div>
+                                `;
+                            } else {
+                                bannerHtml = `
+                                    <div class="connection-banner demo" style="height: 100%; margin-bottom: 0;">
+                                        <div>
+                                            <span class="banner-badge"><span class="banner-pulse"></span>SANDBOX ACTIVE</span>
+                                        </div>
+                                        <div class="banner-text">
+                                            Connected to <strong>${brokerName}</strong> in <strong>Safe Sandbox Demo Mode</strong> (Client ID: <code>${clientCode}</code>). Orders are simulated. For live exchange execution and live rates, please connect an active Angel One account.
+                                        </div>
+                                        <div style="font-size: 0.72rem; color: var(--text-secondary); margin-left: 10px;">
+                                            Mode: <span style="color: var(--orange-text); font-weight: bold;">DEMO / SIMULATED</span>
+                                        </div>
+                                    </div>
+                                `;
+                            }
+                            bannerContainer.innerHTML = bannerHtml;
+                            bannerContainer.dataset.bannerKey = bannerKey;
+                        }
+
+                        // Render Funds and P&L Card
+                        const funds = data.funds || { available: 0, used: 0, total: 0, pnl: 0 };
+                        
+                        const formatPnl = (val) => {
+                            const formatted = formatRupee(val);
+                            return val >= 0 ? `+${formatted}` : formatted;
+                        };
+                        
+                        const pnlClass = funds.pnl >= 0 ? 'funds-value pnl-profit' : 'funds-value pnl-loss';
+                        
+                        const fundsHtml = `
+                            <div class="funds-card" style="height: 100%;">
+                                <div class="funds-metric">
+                                    <span class="funds-label">Total Margin</span>
+                                    <span class="funds-value" id="val-funds-total">${formatRupee(funds.total)}</span>
+                                </div>
+                                <div class="funds-metric">
+                                    <span class="funds-label">Used Margin</span>
+                                    <span class="funds-value used" id="val-funds-used">${formatRupee(funds.used)}</span>
+                                </div>
+                                <div class="funds-metric">
+                                    <span class="funds-label">Available Margin</span>
+                                    <span class="funds-value available" id="val-funds-avail">${formatRupee(funds.available)}</span>
+                                </div>
+                                <div class="funds-metric">
+                                    <span class="funds-label">Today's P&L</span>
+                                    <span class="${pnlClass}" id="val-funds-pnl">${formatPnl(funds.pnl)}</span>
+                                </div>
+                            </div>
+                        `;
+                        
+                        if (!fundsContainer.innerHTML) {
+                            fundsContainer.innerHTML = fundsHtml;
+                        } else {
+                            updateText('val-funds-total', formatRupee(funds.total));
+                            updateText('val-funds-used', formatRupee(funds.used));
+                            updateText('val-funds-avail', formatRupee(funds.available));
+                            
+                            const pnlEl = document.getElementById('val-funds-pnl');
+                            if (pnlEl) {
+                                pnlEl.className = pnlClass;
+                                updateText('val-funds-pnl', formatPnl(funds.pnl));
+                            }
+                        }
+                    } else {
+                        topStatusArea.style.display = 'none';
+                        bannerContainer.innerHTML = '';
+                        bannerContainer.removeAttribute('data-banner-key');
+                        fundsContainer.innerHTML = '';
+                    }
+                }
+
+                // Cache expiries and symbols
+                nfoExpiries = data.nfo_expiries || [];
+                mcxExpiries = data.mcx_expiries || [];
+                nfoSymbols = data.nfo_symbols || [];
+                mcxSymbols = data.mcx_symbols || [];
+                
+                // Update dynamic autocomplete suggestions
+                updateExpiryDatalist();
+                updateSymbolDatalist();
+
+                // Render strategies & logs
+                activeStrategies = data.strategies || {};
+                renderStrategies();
+                renderLogs(data.logs || []);
+
+                // Render Account Positions & Orders removed
+                
+                document.getElementById('engine-status-time').innerText = 'Last update: ' + new Date().toLocaleTimeString();
+
+            } catch (error) {
+                console.error('Error fetching state:', error);
+                document.getElementById('status-dot').className = 'status-dot';
+                document.getElementById('status-text').innerText = 'ERROR';
+                document.getElementById('status-text').style.color = 'var(--danger-color)';
+            }
+        }
+
+        // Check authentication onboarding status
+        let isAuthChecking = false;
+        async function checkAuthStatus() {
+            if (isAuthChecking) return;
+            isAuthChecking = true;
+            try {
+                const res = await fetch('/api/auth/status');
+                if (res.ok) {
+                    const data = await res.json();
+                    const authScreen = document.getElementById('auth-screen');
+                    const appScreen = document.getElementById('app-screen');
+                    
+                    if (!data.registered) {
+                        if (authScreen.style.display !== 'flex') {
+                            authScreen.style.display = 'flex';
+                            appScreen.style.display = 'none';
+                            goToAuthStep(1);
+                        }
+                    } else {
+                        authScreen.style.display = 'none';
+                        appScreen.style.display = 'block';
+                    }
+                }
+            } catch (err) {
+                console.error("Auth status query failed:", err);
+            } finally {
+                isAuthChecking = false;
+            }
+        }
+
+        // Apply theme color styling according to selected broker dynamically!
+        function applyBrokerTheme(brokerName) {
+            const root = document.documentElement;
+            if (!brokerName || brokerName === 'NONE') {
+                root.style.setProperty('--accent-color', '#4f46e5');
+                root.style.setProperty('--accent-glow', 'rgba(79, 70, 229, 0.3)');
+                root.style.setProperty('--card-border-glow', 'rgba(79, 70, 229, 0.35)');
+                return;
+            }
+            const name = brokerName.toLowerCase();
+            if (name.includes('zerodha')) {
+                root.style.setProperty('--accent-color', '#f97316');
+                root.style.setProperty('--accent-glow', 'rgba(249, 115, 22, 0.3)');
+                root.style.setProperty('--card-border-glow', 'rgba(249, 115, 22, 0.35)');
+            } else if (name.includes('fyers')) {
+                root.style.setProperty('--accent-color', '#10b981');
+                root.style.setProperty('--accent-glow', 'rgba(16, 185, 129, 0.3)');
+                root.style.setProperty('--card-border-glow', 'rgba(16, 185, 129, 0.35)');
+            } else if (name.includes('groww')) {
+                root.style.setProperty('--accent-color', '#00d09c');
+                root.style.setProperty('--accent-glow', 'rgba(0, 208, 156, 0.3)');
+                root.style.setProperty('--card-border-glow', 'rgba(0, 208, 156, 0.35)');
+            } else {
+                root.style.setProperty('--accent-color', '#4f46e5');
+                root.style.setProperty('--accent-glow', 'rgba(79, 70, 229, 0.3)');
+                root.style.setProperty('--card-border-glow', 'rgba(79, 70, 229, 0.35)');
+            }
+        }
+
+        // Periodically run fetch and status checking
+        setInterval(fetchAppState, 1000);
+        setInterval(checkAuthStatus, 5000);
+        checkAuthStatus(); // Initial call
+        fetchAppState(); // Initial call
+
+        // Switch tab segment NFO/MCX
+        function switchSegment(segment) {
+            currentSegment = segment;
+            document.getElementById('tab-nfo').className = segment === 'NFO' ? 'tab active' : 'tab';
+            document.getElementById('tab-mcx').className = segment === 'MCX' ? 'tab active' : 'tab';
+            renderStrategies();
+        }
+
+        // Render strategy lists based on active segment
+        function renderStrategies() {
+            const listEl = document.getElementById('strategies-list');
+            const filteredStratKeys = Object.keys(activeStrategies).filter(key => {
+                const strat = activeStrategies[key];
+                if (!strat) return false; // Safe check for locally deleted strategies
+                const firstLegExch = strat.legs && strat.legs.length > 0 ? strat.legs[0].exch_seg : 'NFO';
+                return currentSegment === 'MCX' ? firstLegExch === 'MCX' : firstLegExch !== 'MCX';
+            });
+
+            // Sort keys so strategies maintain consistent positions
+            filteredStratKeys.sort((a, b) => parseInt(a) - parseInt(b));
+
+            // Detect if full re-render is needed
+            const needFullRender = JSON.stringify(filteredStratKeys) !== JSON.stringify(lastStrategyKeys);
+
+            if (needFullRender) {
+                lastStrategyKeys = filteredStratKeys;
+                if (filteredStratKeys.length === 0) {
+                    listEl.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-title">No Active ${currentSegment} Strategies</div>
+                            <div class="empty-state-text">Create a new spread strategy using the "Add Strategy" button to start monitoring live differences.</div>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                let html = '';
+                filteredStratKeys.forEach(h_row => {
+                    html += generateStrategyCardHtml(h_row);
+                });
+                listEl.innerHTML = html;
+            } else {
+                // Lightweight live update: updates only text content, backgrounds, and unfocused inputs!
+                filteredStratKeys.forEach(h_row => {
+                    updateLiveStrategyValues(h_row);
+                });
+            }
+        }
+
+        // Generate full card HTML with clutter-free columns
+        function generateStrategyCardHtml(h_row) {
+            const strat = activeStrategies[h_row];
+            const multiplier = strat.strategy_lot || 1;
+            const targetBuyVal = strat.target_buy !== null ? strat.target_buy : '';
+            const targetSellVal = strat.target_sell !== null ? strat.target_sell : '';
+            const expiries = currentSegment === 'MCX' ? mcxExpiries : nfoExpiries;
+            const stratType = strat.strategy_type || 'SPREAD';
+
+            return `
+                <article class="strat-card glass-panel" id="strat-card-${h_row}">
+                    
+                    <!-- Header -->
+                    <div class="strat-header">
+                        <div class="strat-meta">
+                            <span class="strat-badge" id="badge-sym-${h_row}">${strat.symbol}</span>
+                            <span class="strat-type-badge ${stratType.toLowerCase()}">${stratType}</span>
+                            <div class="strat-info-tag">Expiry: <span id="span-exp-${h_row}">${strat.expiry}</span></div>
+                        </div>
+
+                        <div class="strat-controls">
+                            <div class="control-group">
+                                <label class="control-label">Multiplier (Lot)</label>
+                                <input type="number" min="1" class="input-dark" id="ctrl-lot-${h_row}" value="${multiplier}" 
+                                       onchange="updateStrategyHeader('${h_row}', 'strategy_lot', this.value)">
+                            </div>
+                            <div class="control-group">
+                                <label class="control-label">Target Buy</label>
+                                <input type="number" step="0.05" class="input-dark" id="ctrl-tbuy-${h_row}" placeholder="e.g. 5.5" value="${targetBuyVal}" 
+                                       onchange="updateStrategyHeader('${h_row}', 'target_buy', this.value)">
+                            </div>
+                            <div class="control-group">
+                                <label class="control-label">Target Sell</label>
+                                <input type="number" step="0.05" class="input-dark" id="ctrl-tsell-${h_row}" placeholder="e.g. -10" value="${targetSellVal}" 
+                                       onchange="updateStrategyHeader('${h_row}', 'target_sell', this.value)">
+                            </div>
+                            <div class="control-group">
+                                <label class="control-label">Trade Action</label>
+                                <select class="select-dark" id="ctrl-action-${h_row}" onchange="updateStrategyHeader('${h_row}', 'trade_action', this.value)">
+                                    <option value="" ${strat.trade_action === '' ? 'selected' : ''}>-- SELECT ACTION --</option>
+                                    <option value="BUY NOW" ${strat.trade_action === 'BUY NOW' ? 'selected' : ''}>BUY NOW</option>
+                                    <option value="SELL NOW" ${strat.trade_action === 'SELL NOW' ? 'selected' : ''}>SELL NOW</option>
+                                    <option value="SET TARGET BUY" ${strat.trade_action === 'SET TARGET BUY' ? 'selected' : ''}>SET TARGET BUY</option>
+                                    <option value="SET TARGET SELL" ${strat.trade_action === 'SET TARGET SELL' ? 'selected' : ''}>SET TARGET SELL</option>
+                                    <option value="CANCEL" ${strat.trade_action === 'CANCEL' ? 'selected' : ''}>CANCEL</option>
+                                </select>
+                            </div>
+
+                            <button class="btn-go ${strat.execute_trigger === 'GO' ? 'active' : ''}" id="btn-go-${h_row}" onclick="toggleGoTrigger('${h_row}')">
+                                CO
+                            </button>
+                            
+                            ${stratType === 'DELTA' ? '' : `
+                            <button class="btn btn-retro-outline" onclick="addLegToStrategy('${h_row}')">
+                                <svg class="icon" viewBox="0 0 24 24" style="stroke: #fb923c;"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                Add Leg
+                            </button>
+                            `}
+
+                            <button class="btn-delete-icon" onclick="deleteStrategy('${h_row}')" title="Delete Strategy">
+                                <svg class="icon" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0 1 16.138 21H7.862a2 2 0 0 1-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v3M4 7h16"></path></svg>
+                            </button>
+                        </div>
+
+                        <div class="badla-badges">
+                            <div class="badla-badge buy">
+                                <span class="badla-label">Buy Diff</span>
+                                <span class="badla-val" id="badge-buyval-${h_row}">${strat.buy_diff !== null ? strat.buy_diff : '--'}</span>
+                            </div>
+                            <div class="badla-badge sell">
+                                <span class="badla-label">Sell Diff</span>
+                                <span class="badla-val" id="badge-sellval-${h_row}">${strat.sell_diff !== null ? strat.sell_diff : '--'}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Minimal Legs Table -->
+                    <div class="table-container">
+                        <table class="legs-table">
+                            <thead>
+                                <tr>
+                                    <th>Strike</th>
+                                    <th>Expiry</th>
+                                    <th>CE/PE</th>
+                                    <th>Action</th>
+                                    <th>Lot Wt.</th>
+                                    <th style="color: #6ee7b7;">Bid</th>
+                                    <th style="color: #fca5a5;">Ask</th>
+                                    <th style="color: #c7d2fe;">LTP</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="legs-body-${h_row}">
+                                ${strat.legs.map((leg, idx) => generateLegRowHtml(h_row, leg, idx, expiries)).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Footer Status -->
+                    <div class="strat-footer">
+                        <div class="strat-log-msg">
+                            <span class="strat-log-icon" id="span-icon-${h_row}"></span>
+                            <span id="span-status-${h_row}">${strat.status || 'Live active.'}</span>
+                        </div>
+                        <div class="last-update-time">Active spread monitoring engine.</div>
+                    </div>
+
+                </article>
+            `;
+        }
+
+        // Generate clutter-free leg row HTML
+        function generateLegRowHtml(h_row, leg, idx, expiries) {
+            const bidVal = leg.bid !== undefined && leg.bid !== null ? leg.bid : '--';
+            const askVal = leg.ask !== undefined && leg.ask !== null ? leg.ask : '--';
+            const ltpVal = leg.ltp !== undefined && leg.ltp !== null ? leg.ltp : '--';
+            
+            const strat = activeStrategies[h_row];
+            const isDelta = strat && strat.strategy_type === 'DELTA';
+            
+            if (isDelta) {
+                if (idx === 0) {
+                    // Leg 1: Underlying Stock/Future
+                    const isFut = leg.opt_type === 'FUT';
+                    const expiryInputHtml = isFut 
+                        ? `<input type="text" class="leg-cell-input" style="width: 100px;" id="leg-expiry-${h_row}-${idx}" value="${leg.expiry || ''}" placeholder="e.g. 25-Jun-2026" list="expiry-list" onchange="updateLegField('${h_row}', ${idx}, 'expiry', this.value)">`
+                        : `<input type="text" class="leg-cell-input" style="width: 100px; color: var(--text-muted); border-color: rgba(255,255,255,0.03);" value="--" disabled>`;
+                        
+                    return `
+                        <tr id="leg-row-${h_row}-${idx}">
+                            <td>
+                                <input type="text" class="leg-cell-input" style="width: 70px; color: var(--text-secondary); border-color: rgba(255,255,255,0.03); font-weight: bold;" value="STOCK/FUT" disabled>
+                            </td>
+                            <td>
+                                ${expiryInputHtml}
+                            </td>
+                            <td>
+                                <select class="leg-cell-select" style="width: 70px;" id="leg-type-${h_row}-${idx}" onchange="updateLegField('${h_row}', ${idx}, 'opt_type', this.value); setTimeout(fetchAppState, 500);">
+                                    <option value="STOCK" ${leg.opt_type === 'STOCK' ? 'selected' : ''}>STOCK</option>
+                                    <option value="FUT" ${leg.opt_type === 'FUT' ? 'selected' : ''}>FUT</option>
+                                </select>
+                            </td>
+                            <td>
+                                <select class="leg-cell-select action-type" id="leg-action-${h_row}-${idx}" onchange="updateLegField('${h_row}', ${idx}, 'action', this.value)">
+                                    <option value="BUY" ${leg.action === 'BUY' ? 'selected' : ''}>BUY</option>
+                                    <option value="SELL" ${leg.action === 'SELL' ? 'selected' : ''}>SELL</option>
+                                </select>
+                            </td>
+                            <td>
+                                <input type="number" min="0.1" step="0.5" class="leg-cell-input" style="width: 60px;" id="leg-lot-${h_row}-${idx}" value="${leg.lot || 1.0}"
+                                       onchange="updateLegField('${h_row}', ${idx}, 'lot', this.value)">
+                            </td>
+                            <td class="col-mono" style="font-weight: 600; font-size: 0.85rem; color: #6ee7b7;" id="td-bid-${h_row}-${idx}">${bidVal}</td>
+                            <td class="col-mono" style="font-weight: 600; font-size: 0.85rem; color: #fca5a5;" id="td-ask-${h_row}-${idx}">${askVal}</td>
+                            <td class="col-mono" style="font-weight: 600; font-size: 0.85rem; color: #a5b4fc;" id="td-ltp-${h_row}-${idx}">${ltpVal}</td>
+                            <td></td>
+                        </tr>
+                    `;
+                } else {
+                    // Leg 2: Option (CE/PE)
+                    return `
+                        <tr id="leg-row-${h_row}-${idx}">
+                            <td>
+                                <input type="text" class="leg-cell-input" style="width: 70px;" id="leg-strike-${h_row}-${idx}" value="${leg.strike || ''}" placeholder="e.g. 580"
+                                       onchange="updateLegField('${h_row}', ${idx}, 'strike', this.value)">
+                            </td>
+                            <td>
+                                <input type="text" class="leg-cell-input" style="width: 100px;" id="leg-expiry-${h_row}-${idx}" value="${leg.expiry || ''}" placeholder="e.g. 25-Jun-2026" list="expiry-list"
+                                       onchange="updateLegField('${h_row}', ${idx}, 'expiry', this.value)">
+                            </td>
+                            <td>
+                                <select class="leg-cell-select ce-pe" id="leg-type-${h_row}-${idx}" onchange="updateLegField('${h_row}', ${idx}, 'opt_type', this.value)">
+                                    <option value="CE" ${leg.opt_type === 'CE' ? 'selected' : ''}>CE</option>
+                                    <option value="PE" ${leg.opt_type === 'PE' ? 'selected' : ''}>PE</option>
+                                </select>
+                            </td>
+                            <td>
+                                <select class="leg-cell-select action-type" id="leg-action-${h_row}-${idx}" onchange="updateLegField('${h_row}', ${idx}, 'action', this.value)">
+                                    <option value="BUY" ${leg.action === 'BUY' ? 'selected' : ''}>BUY</option>
+                                    <option value="SELL" ${leg.action === 'SELL' ? 'selected' : ''}>SELL</option>
+                                </select>
+                            </td>
+                            <td>
+                                <input type="number" min="0.1" step="0.5" class="leg-cell-input" style="width: 60px;" id="leg-lot-${h_row}-${idx}" value="${leg.lot || 1.0}"
+                                       onchange="updateLegField('${h_row}', ${idx}, 'lot', this.value)">
+                            </td>
+                            <td class="col-mono" style="font-weight: 600; font-size: 0.85rem; color: #6ee7b7;" id="td-bid-${h_row}-${idx}">${bidVal}</td>
+                            <td class="col-mono" style="font-weight: 600; font-size: 0.85rem; color: #fca5a5;" id="td-ask-${h_row}-${idx}">${askVal}</td>
+                            <td class="col-mono" style="font-weight: 600; font-size: 0.85rem; color: #a5b4fc;" id="td-ltp-${h_row}-${idx}">${ltpVal}</td>
+                            <td></td>
+                        </tr>
+                    `;
+                }
+            }
+            
+            // Default SPREAD leg row
+            return `
+                <tr id="leg-row-${h_row}-${idx}">
+                    <td>
+                        <input type="text" class="leg-cell-input" style="width: 70px;" id="leg-strike-${h_row}-${idx}" value="${leg.strike || ''}" placeholder="e.g. 580"
+                               onchange="updateLegField('${h_row}', ${idx}, 'strike', this.value)">
+                    </td>
+                    <td>
+                        <input type="text" class="leg-cell-input" style="width: 100px;" id="leg-expiry-${h_row}-${idx}" value="${leg.expiry || ''}" placeholder="e.g. 25-Jun-2026" list="expiry-list"
+                               onchange="updateLegField('${h_row}', ${idx}, 'expiry', this.value)">
+                    </td>
+                    <td>
+                        <select class="leg-cell-select ce-pe" id="leg-type-${h_row}-${idx}" onchange="updateLegField('${h_row}', ${idx}, 'opt_type', this.value)">
+                            <option value="CE" ${leg.opt_type === 'CE' ? 'selected' : ''}>CE</option>
+                            <option value="PE" ${leg.opt_type === 'PE' ? 'selected' : ''}>PE</option>
+                        </select>
+                    </td>
+                    <td>
+                        <select class="leg-cell-select action-type" id="leg-action-${h_row}-${idx}" onchange="updateLegField('${h_row}', ${idx}, 'action', this.value)">
+                            <option value="BUY" ${leg.action === 'BUY' ? 'selected' : ''}>BUY</option>
+                            <option value="SELL" ${leg.action === 'SELL' ? 'selected' : ''}>SELL</option>
+                        </select>
+                    </td>
+                    <td>
+                        <input type="number" min="0.1" step="0.5" class="leg-cell-input" style="width: 60px;" id="leg-lot-${h_row}-${idx}" value="${leg.lot || 1.0}"
+                               onchange="updateLegField('${h_row}', ${idx}, 'lot', this.value)">
+                    </td>
+                    <td class="col-mono" style="font-weight: 600; font-size: 0.85rem; color: #6ee7b7;" id="td-bid-${h_row}-${idx}">${bidVal}</td>
+                    <td class="col-mono" style="font-weight: 600; font-size: 0.85rem; color: #fca5a5;" id="td-ask-${h_row}-${idx}">${askVal}</td>
+                    <td class="col-mono" style="font-weight: 600; font-size: 0.85rem; color: #a5b4fc;" id="td-ltp-${h_row}-${idx}">${ltpVal}</td>
+                    <td>
+                        <button class="leg-row-delete" onclick="deleteLegFromStrategy('${h_row}', ${idx})" title="Remove Leg">
+                            <svg class="icon" viewBox="0 0 24 24" style="width: 14px; height: 14px;"><path d="M18 6L6 18M6 6l12 12"></path></svg>
+                        </button>
+                    </td>
+                </tr>
+            `;
+        }
+
+        // Targeted DOM selective text diffing
+        const updateText = (elId, text) => {
+            const el = document.getElementById(elId);
+            if (el) {
+                const strText = text !== null && text !== undefined ? String(text) : '--';
+                if (el.innerText !== strText) {
+                    el.innerText = strText;
+                }
+            }
+        };
+
+        const formatRupee = (value) => {
+            if (value === undefined || value === null) return '₹--';
+            const parsed = parseFloat(value);
+            if (isNaN(parsed)) return '₹--';
+            return '₹' + parsed.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        };
+
+        // Targeted DOM selective input diffing with race condition prevention
+        let pendingUpdates = {};
+
+        const updateInputVal = (elId, val, updateKey = null) => {
+            const el = document.getElementById(elId);
+            if (el && document.activeElement !== el) {
+                if (updateKey && pendingUpdates[updateKey]) {
+                    if (Date.now() - pendingUpdates[updateKey] < 3500) {
+                        return; // Keep user's local input until backend finishes updating
+                    } else {
+                        delete pendingUpdates[updateKey];
+                    }
+                }
+                const strVal = val !== null && val !== undefined ? String(val) : '';
+                if (el.value !== strVal) {
+                    el.value = strVal;
+                }
+            }
+        };
+
+        // Dynamic focused-safe real-time UI updates
+        function updateLiveStrategyValues(h_row) {
+            const strat = activeStrategies[h_row];
+            if (!strat) return;
+
+            // Update header values safely with diffing
+            updateText(`badge-buyval-${h_row}`, strat.buy_diff);
+            updateText(`badge-sellval-${h_row}`, strat.sell_diff);
+            
+            // Update inputs safely
+            updateInputVal(`ctrl-lot-${h_row}`, strat.strategy_lot, `${h_row}-strategy_lot`);
+            updateInputVal(`ctrl-tbuy-${h_row}`, strat.target_buy, `${h_row}-target_buy`);
+            updateInputVal(`ctrl-tsell-${h_row}`, strat.target_sell, `${h_row}-target_sell`);
+
+            // Force update Trade Action dropdown if stopped/empty to provide immediate visual feedback!
+            const actEl = document.getElementById(`ctrl-action-${h_row}`);
+            if (actEl) {
+                const backendVal = strat.trade_action || '';
+                if (backendVal === '' || document.activeElement !== actEl) {
+                    if (actEl.value !== backendVal) {
+                        actEl.value = backendVal;
+                    }
+                }
+            }
+
+            // Update GO button state
+            const goBtn = document.getElementById(`btn-go-${h_row}`);
+            if (goBtn) {
+                const isGo = strat.execute_trigger === 'GO';
+                if (goBtn.classList.contains('active') !== isGo) {
+                    if (isGo) goBtn.classList.add('active');
+                    else goBtn.classList.remove('active');
+                }
+            }
+
+            // Update footer status message
+            updateText(`span-status-${h_row}`, strat.status || 'Live active.');
+            
+            const statusIcon = document.getElementById(`span-icon-${h_row}`);
+            if (statusIcon) {
+                let statusClass = 'strat-log-icon';
+                const lowerStatus = (strat.status || '').toLowerCase();
+                if (lowerStatus.includes('active') || lowerStatus.includes('live')) {
+                    statusClass += ' active';
+                } else if (lowerStatus.includes('waiting') || lowerStatus.includes('trigger')) {
+                    statusClass += ' triggered';
+                } else if (lowerStatus.includes('error') || lowerStatus.includes('failed') || lowerStatus.includes('unconfigured') || lowerStatus.includes('stopped')) {
+                    statusClass += ' error';
+                }
+                if (statusIcon.className !== statusClass) {
+                    statusIcon.className = statusClass;
+                }
+            }
+
+            // Update Leg table body rows
+            const expiries = currentSegment === 'MCX' ? mcxExpiries : nfoExpiries;
+            const tableBody = document.getElementById(`legs-body-${h_row}`);
+            if (!tableBody) return;
+            
+            const domRowsCount = tableBody.children.length;
+            if (domRowsCount !== strat.legs.length) {
+                tableBody.innerHTML = strat.legs.map((leg, idx) => generateLegRowHtml(h_row, leg, idx, expiries)).join('');
+                return;
+            }
+
+            strat.legs.forEach((leg, idx) => {
+                updateInputVal(`leg-strike-${h_row}-${idx}`, leg.strike, `${h_row}-${idx}-strike`);
+                updateInputVal(`leg-expiry-${h_row}-${idx}`, leg.expiry, `${h_row}-${idx}-expiry`);
+                updateInputVal(`leg-type-${h_row}-${idx}`, leg.opt_type, `${h_row}-${idx}-opt_type`);
+                updateInputVal(`leg-action-${h_row}-${idx}`, leg.action, `${h_row}-${idx}-action`);
+                updateInputVal(`leg-lot-${h_row}-${idx}`, leg.lot, `${h_row}-${idx}-lot`);
+
+                // Update Bid, Ask, LTP cells cleanly
+                const bidVal = leg.bid !== undefined && leg.bid !== null ? leg.bid : '--';
+                const askVal = leg.ask !== undefined && leg.ask !== null ? leg.ask : '--';
+                const ltpVal = leg.ltp !== undefined && leg.ltp !== null ? leg.ltp : '--';
+                updateText(`td-bid-${h_row}-${idx}`, bidVal);
+                updateText(`td-ask-${h_row}-${idx}`, askVal);
+                updateText(`td-ltp-${h_row}-${idx}`, ltpVal);
+            });
+        }
+
+        // Render console terminal logs
+        let lastConsoleLength = 0;
+        function renderLogs(logs) {
+            if (logs.length === lastConsoleLength) return;
+            
+            const consoleEl = document.getElementById('console-logs');
+            let html = '';
+            
+            logs.forEach(log => {
+                let lvlClass = 'info';
+                if (log.includes('[SUCCESS]')) lvlClass = 'success';
+                else if (log.includes('[ERROR]') || log.includes('[CRITICAL]')) lvlClass = 'error';
+                else if (log.includes('[WARNING]')) lvlClass = 'warning';
+                
+                const tsMatch = log.match(/^\[(.*?)\]/);
+                const ts = tsMatch ? `[${tsMatch[1]}]` : '[INFO]';
+                const body = log.replace(/^\[.*?\]/, '').trim();
+
+                html += `
+                    <div class="console-line">
+                        <span class="console-ts">${ts}</span>
+                        <span class="console-text ${lvlClass}">${body}</span>
+                    </div>
+                `;
+            });
+            
+            consoleEl.innerHTML = html;
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+            lastConsoleLength = logs.length;
+        }
+
+        // Post header controls edits - sending h_row as string cleanly
+        async function updateStrategyHeader(h_row, field, value) {
+            const updateKey = `${h_row}-${field}`;
+            pendingUpdates[updateKey] = Date.now();
+            try {
+                await fetch('/api/strategy/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        header_row: h_row,
+                        field: field,
+                        value: value
+                    })
+                });
+            } catch (error) {
+                console.error('Error updating strategy header:', error);
+            }
+        }
+
+        // Inline Leg details update POST endpoint - sending h_row as string cleanly
+        async function updateLegField(h_row, leg_idx, field, value) {
+            const updateKey = `${h_row}-${leg_idx}-${field}`;
+            pendingUpdates[updateKey] = Date.now();
+            try {
+                const res = await fetch('/api/strategy/leg/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        header_row: h_row,
+                        leg_index: parseInt(leg_idx),
+                        field: field,
+                        value: value
+                    })
+                });
+                if (!res.ok) {
+                    const err = await res.json();
+                    console.error('Leg update failed:', err.message);
+                }
+            } catch (error) {
+                console.error('Connection failed updating leg details:', error);
+            }
+        }
+
+        // Dynamic Add Leg to strategy card - sending h_row as string cleanly
+        async function addLegToStrategy(h_row) {
+            try {
+                const res = await fetch('/api/strategy/leg/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ header_row: h_row })
+                });
+                if (res.ok) fetchAppState();
+            } catch (error) {
+                console.error('Error adding leg:', error);
+            }
+        }
+
+        // Delete leg from strategy card - sending h_row as string cleanly
+        async function deleteLegFromStrategy(h_row, leg_idx) {
+            if (!confirm('Are you sure you want to remove this options leg?')) return;
+            try {
+                const res = await fetch('/api/strategy/leg/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        header_row: h_row,
+                        leg_index: parseInt(leg_idx)
+                    })
+                });
+                if (res.ok) fetchAppState();
+            } catch (error) {
+                console.error('Error deleting leg:', error);
+            }
+        }
+
+        // Toggle EXECUTE (GO) trigger
+        async function toggleGoTrigger(h_row) {
+            const strat = activeStrategies[h_row];
+            if (!strat) return;
+            const newVal = strat.execute_trigger === 'GO' ? '' : 'GO';
+            await updateStrategyHeader(h_row, 'execute_trigger', newVal);
+            fetchAppState();
+        }
+
+        // Global Emergency Panic Stop (CONFIRMATION REMOVED FOR MAXIMUM SPEED!)
+        async function triggerPanicStop() {
+            try {
+                const res = await fetch('/api/engine/panic-stop', { method: 'POST' });
+                if (res.ok) {
+                    fetchAppState();
+                    checkAuthStatus();
+                }
+            } catch (error) {
+                console.error('Error triggering panic stop:', error);
+            }
+        }
+
+        // Toggle Badla Trading Engine
+        let isEngineToggling = false;
+        async function toggleEngine() {
+            if (isEngineToggling) return;
+            
+            // If engine is running, clicking it means STOP. Ask for confirmation as it will logout!
+            const engineToggleBtn = document.getElementById('btn-engine-toggle');
+            const isCurrentlyRunning = engineToggleBtn && engineToggleBtn.innerText.includes('Stop');
+            
+            if (isCurrentlyRunning) {
+                if (!confirm("Stopping the engine will deactivate all strategy spreads and log you out. Proceed?")) {
+                    return;
+                }
+            }
+            
+            isEngineToggling = true;
+            const endpoint = isCurrentlyRunning ? '/api/engine/stop' : '/api/engine/start';
+            
+            try {
+                const res = await fetch(endpoint, { method: 'POST' });
+                if (res.ok) {
+                    fetchAppState();
+                    if (isCurrentlyRunning) {
+                        checkAuthStatus();
+                    }
+                } else {
+                    alert("Failed to toggle trading engine status.");
+                }
+            } catch (error) {
+                console.error('Error toggling trading engine:', error);
+                alert("Connection error toggling engine.");
+            } finally {
+                isEngineToggling = false;
+            }
+        }
+
+        // Delete strategy completely - sending h_row as string cleanly
+        async function deleteStrategy(h_row) {
+            if (!confirm('Are you sure you want to delete this strategy spread?')) return;
+            try {
+                const res = await fetch('/api/strategy/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ header_row: h_row })
+                });
+                if (res.ok) {
+                    delete activeStrategies[h_row];
+                    renderStrategies();
+                }
+            } catch (error) {
+                console.error('Error deleting strategy:', error);
+            }
+        }
+
+        // Clear terminal backend console
+        async function clearAllLogs() {
+            try {
+                const res = await fetch('/api/logs/clear', { method: 'POST' });
+                if (res.ok) {
+                    document.getElementById('console-logs').innerHTML = '';
+                    lastConsoleLength = 0;
+                }
+            } catch (error) {
+                console.error('Error clearing terminal logs:', error);
+            }
+        }
+
+        // Trigger SaaS Logout
+        async function triggerLogout() {
+            if (!confirm("Are you sure you want to logout and clear all broker credentials?")) return;
+            try {
+                const res = await fetch('/api/auth/logout', { method: 'POST' });
+                if (res.ok) {
+                    checkAuthStatus();
+                    fetchAppState();
+                } else {
+                    alert("Logout failed. Please try again.");
+                }
+            } catch (error) {
+                console.error('Error during logout:', error);
+                alert("Connection error during logout.");
+            }
+        }
+
+        // Dynamic Datalist Updates for Symbol suggestions
+        let lastRenderedSegment = '';
+        let lastSymbolsLength = 0;
+        
+        function updateSymbolDatalist() {
+            const listEl = document.getElementById('symbol-list');
+            if (!listEl) return;
+            const segment = document.getElementById('form-segment').value;
+            const symbols = segment === 'MCX' ? mcxSymbols : nfoSymbols;
+            
+            // Only update DOM if the segment has changed or symbols array length has changed
+            if (segment === lastRenderedSegment && symbols.length === lastSymbolsLength && listEl.children.length > 0) {
+                return;
+            }
+            
+            listEl.innerHTML = symbols.map(sym => `<option value="${sym}"></option>`).join('');
+            lastRenderedSegment = segment;
+            lastSymbolsLength = symbols.length;
+        }
+
+        // Dynamic Datalist Updates for Expiries
+        let lastExpirySegment = '';
+        let lastExpiriesLen = 0;
+        
+        function updateExpiryDatalist() {
+            const listEl = document.getElementById('expiry-list');
+            if (!listEl) return;
+            const segment = document.getElementById('form-segment').value;
+            const expiries = segment === 'MCX' ? mcxExpiries : nfoExpiries;
+            
+            // Only update DOM if the segment has changed or expiries array length has changed
+            if (segment === lastExpirySegment && expiries.length === lastExpiriesLen && listEl.children.length > 0) {
+                return;
+            }
+            
+            listEl.innerHTML = expiries.map(exp => `<option value="${exp}"></option>`).join('');
+            lastExpirySegment = segment;
+            lastExpiriesLen = expiries.length;
+        }
+
+        // Simplified Add Strategy Modal controls
+        function openAddModal() {
+            document.getElementById('add-modal').classList.add('show');
+            document.getElementById('form-symbol').value = '';
+            document.getElementById('form-multiplier').value = '1';
+            document.getElementById('form-legs-count').value = '2';
+            document.getElementById('form-legs-count').disabled = false;
+            document.getElementById('form-strategy-type').value = 'SPREAD';
+            
+            handleSegmentChange('NFO');
+        }
+
+        function closeAddModal() {
+            document.getElementById('add-modal').classList.remove('show');
+        }
+
+        function handleTypeChange(val) {
+            const legsCountInput = document.getElementById('form-legs-count');
+            if (val === 'DELTA') {
+                legsCountInput.value = '2';
+                legsCountInput.disabled = true;
+            } else {
+                legsCountInput.value = '2';
+                legsCountInput.disabled = false;
+            }
+        }
+
+        function handleSegmentChange(val) {
+            updateExpiryDatalist();
+            updateSymbolDatalist();
+            
+            const expiryInput = document.getElementById('form-expiry');
+            const expiries = val === 'MCX' ? mcxExpiries : nfoExpiries;
+            if (expiries.length > 0) {
+                expiryInput.value = expiries[0];
+            } else {
+                expiryInput.value = '';
+            }
+        }
+
+        function handleSymbolChange(val) {
+            const sym = val.toUpperCase().trim();
+            const segmentSelect = document.getElementById('form-segment');
+            
+            const mcxCommodities = ['GOLD', 'SILVER', 'CRUDEOIL', 'NATURALGAS', 'GOLDM', 'SILVERM', 'CRUDEOILM', 'NATGASMINI'];
+            const matchedCommodity = mcxCommodities.some(c => sym.startsWith(c));
+            
+            if (matchedCommodity && segmentSelect.value !== 'MCX') {
+                segmentSelect.value = 'MCX';
+                handleSegmentChange('MCX');
+            } else if (!matchedCommodity && segmentSelect.value !== 'NFO') {
+                segmentSelect.value = 'NFO';
+                handleSegmentChange('NFO');
+            }
+        }
+
+        // Simplified Form Submit handler
+        async function submitStrategyForm(event) {
+            event.preventDefault();
+            
+            const symbol = document.getElementById('form-symbol').value.toUpperCase().trim();
+            const expiry = document.getElementById('form-expiry').value;
+            const multiplier = parseFloat(document.getElementById('form-multiplier').value);
+            const legsCount = parseInt(document.getElementById('form-legs-count').value);
+            const segment = document.getElementById('form-segment').value;
+            const strategyType = document.getElementById('form-strategy-type').value;
+
+            const payload = {
+                symbol,
+                expiry,
+                strategy_lot: multiplier,
+                legs_count: legsCount,
+                exch_seg: segment,
+                strategy_type: strategyType
+            };
+
+            try {
+                const res = await fetch('/api/strategy/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (res.ok) {
+                    closeAddModal();
+                    switchSegment(segment);
+                    fetchAppState();
+                } else {
+                    const err = await res.json();
+                    alert(`Failed to initialize strategy: ${err.message || 'Unknown error'}`);
+                }
+            } catch (error) {
+                console.error('Error adding strategy:', error);
+                alert('Connection failure with the backend API.');
+            }
+        }
+
+        // Onboarding Wizard script controls
+        let activeSelectedBroker = 'ANGEL_ONE';
+
+        function goToAuthStep(stepNum) {
+            document.querySelectorAll('.auth-step').forEach(step => step.classList.remove('active'));
+            document.getElementById(`auth-step-${stepNum}`).classList.add('active');
+
+            // Update step progress indicator
+            for (let i = 1; i <= 4; i++) {
+                const stepEl = document.getElementById(`pstep-${i}`);
+                const lineEl = document.getElementById(`pline-${i-1}`);
+                if (stepEl) {
+                    stepEl.classList.remove('active', 'completed');
+                    if (i < stepNum) {
+                        stepEl.classList.add('completed');
+                    } else if (i === stepNum) {
+                        stepEl.classList.add('active');
+                    }
+                }
+                if (lineEl) {
+                    lineEl.classList.remove('active');
+                    if (i < stepNum) {
+                        lineEl.classList.add('active');
+                    }
+                }
+            }
+        }
+
+        function selectBrokerCard(brokerId) {
+            activeSelectedBroker = brokerId;
+            document.querySelectorAll('.broker-card').forEach(card => card.classList.remove('selected'));
+            
+            // Hide all broker fields first
+            document.getElementById('fields-angel').style.display = 'none';
+            document.getElementById('fields-zerodha').style.display = 'none';
+            document.getElementById('fields-fyers').style.display = 'none';
+            document.getElementById('fields-groww').style.display = 'none';
+            
+            const nameMap = {
+                'ANGEL_ONE': 'Angel One (Live Exchange)',
+                'ZERODHA': 'Zerodha Kite (Sandbox)',
+                'FYERS': 'Fyers API (Sandbox)',
+                'GROWW': 'Groww (Sandbox)'
+            };
+            const brokerName = nameMap[brokerId] || 'Selected Broker';
+            const titleEl = document.getElementById('credentials-title');
+            if (titleEl) {
+                titleEl.innerText = `Step 3: Connect ${brokerName}`;
+            }
+            
+            if (brokerId === 'ANGEL_ONE') {
+                document.getElementById('bcard-angel').classList.add('selected');
+                document.getElementById('fields-angel').style.display = 'block';
+            } else if (brokerId === 'ZERODHA') {
+                document.getElementById('bcard-zerodha').classList.add('selected');
+                document.getElementById('fields-zerodha').style.display = 'block';
+            } else if (brokerId === 'FYERS') {
+                document.getElementById('bcard-fyers').classList.add('selected');
+                document.getElementById('fields-fyers').style.display = 'block';
+            } else if (brokerId === 'GROWW') {
+                document.getElementById('bcard-groww').classList.add('selected');
+                document.getElementById('fields-groww').style.display = 'block';
+            }
+        }
+
+        async function submitBrokerRegistration() {
+            const name = document.getElementById('auth-client-name').value.trim();
+            const email = document.getElementById('auth-client-email').value.trim();
+            const mobile = document.getElementById('auth-client-mobile').value.trim();
+            
+            if (!name || !email || !mobile) {
+                alert('Please fill out Client Name, Email, and Mobile Address first in Step 1!');
+                goToAuthStep(1);
+                return;
+            }
+
+            let credentials = {};
+            if (activeSelectedBroker === 'ANGEL_ONE') {
+                credentials = {
+                    api_key: document.getElementById('cr-angel-key').value.trim(),
+                    client_code: document.getElementById('cr-angel-code').value.trim(),
+                    password: document.getElementById('cr-angel-pwd').value.trim()
+                };
+                if (!credentials.api_key || !credentials.client_code || !credentials.password) {
+                    alert('Please enter all Angel One credential fields.');
+                    return;
+                }
+            } else if (activeSelectedBroker === 'ZERODHA') {
+                credentials = {
+                    api_key: document.getElementById('cr-zerodha-key').value.trim(),
+                    client_code: document.getElementById('cr-zerodha-code').value.trim(),
+                    password: document.getElementById('cr-zerodha-pwd').value.trim()
+                };
+                if (!credentials.api_key || !credentials.client_code || !credentials.password) {
+                    alert('Please enter all Zerodha credential fields.');
+                    return;
+                }
+            } else if (activeSelectedBroker === 'FYERS') {
+                credentials = {
+                    api_key: document.getElementById('cr-fyers-key').value.trim(),
+                    app_secret: document.getElementById('cr-fyers-secret').value.trim(),
+                    client_code: document.getElementById('cr-fyers-code').value.trim(),
+                    password: document.getElementById('cr-fyers-pwd').value.trim(),
+                    redirect_uri: document.getElementById('cr-fyers-redirect').value.trim(),
+                    totp_seed: document.getElementById('cr-fyers-totp').value.trim()
+                };
+                if (!credentials.api_key || !credentials.app_secret || !credentials.client_code || !credentials.password) {
+                    alert('Please enter all Fyers credential fields (App ID, App Secret, Client ID, MPIN).');
+                    return;
+                }
+            } else if (activeSelectedBroker === 'GROWW') {
+                credentials = {
+                    api_key: document.getElementById('cr-groww-key').value.trim(),
+                    client_code: document.getElementById('cr-groww-code').value.trim(),
+                    password: document.getElementById('cr-groww-pwd').value.trim()
+                };
+                if (!credentials.api_key || !credentials.client_code || !credentials.password) {
+                    alert('Please enter all Groww credential fields.');
+                    return;
+                }
+            }
+
+            const connectBtn = document.getElementById('btn-broker-connect');
+            const originalText = connectBtn.innerText;
+            connectBtn.innerText = 'Connecting...';
+            connectBtn.disabled = true;
+
+            try {
+                const res = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        client_name: name,
+                        client_email: email,
+                        client_mobile: mobile,
+                        selected_broker: activeSelectedBroker,
+                        credentials: credentials
+                    })
+                });
+
+                // Safely parse JSON – server may return HTML on crash
+                let resData = {};
+                try {
+                    resData = await res.json();
+                } catch (jsonErr) {
+                    const rawText = await res.text().catch(() => '');
+                    console.error('Server returned non-JSON response:', rawText);
+                    alert(`❌ Server error (HTTP ${res.status}): The server returned an unexpected response.\n\nCheck the terminal where algo.py is running for the Python traceback.`);
+                    return;
+                }
+
+                if (res.ok) {
+                    if (resData.connected) {
+                        // Bypassed Step 4 completely via backend auto-login!
+                        document.getElementById('auth-screen').style.display = 'none';
+                        document.getElementById('app-screen').style.display = 'block';
+                        fetchAppState();
+                        checkAuthStatus();
+                        return;
+                    }
+                    // Update Step 4 description with server-provided hint
+                    const otpDesc = document.getElementById('otp-step-description');
+                    const otpLabel = document.getElementById('otp-input-label');
+                    const serverHint = resData.message || 'Enter your 6-digit OTP / TOTP code.';
+
+                    if (otpDesc) {
+                        if (activeSelectedBroker === 'FYERS') {
+                            // Server hint already says "TOTP from authenticator" or "SMS OTP"
+                            const isTOTP = serverHint.toLowerCase().includes('totp') || serverHint.toLowerCase().includes('authenticator');
+                            otpDesc.innerHTML = `<strong style="color: #22c55e;">✅ ${serverHint}</strong>`;
+                            if (otpLabel) otpLabel.textContent = isTOTP ? 'TOTP Code (Google Authenticator / Authy)' : 'Phone OTP (from Fyers SMS)';
+                        } else if (activeSelectedBroker === 'ZERODHA') {
+                            otpDesc.innerHTML = `<strong style="color: #22c55e;">✅ ${serverHint}</strong><br>
+                                <span style="color: var(--text-secondary); font-size: 0.72rem;">Enter the 6-digit TOTP from your Google Authenticator or Authy app.</span>`;
+                            if (otpLabel) otpLabel.textContent = 'Zerodha TOTP Code';
+                        } else {
+                            otpDesc.innerHTML = `<strong style="color: #22c55e;">✅ ${serverHint}</strong><br>
+                                <span style="color: var(--text-secondary); font-size: 0.72rem;">Enter the 6-digit TOTP from your authenticator app.</span>`;
+                            if (otpLabel) otpLabel.textContent = '6-Digit TOTP Code';
+                        }
+                    }
+                    goToAuthStep(4);
+                    document.getElementById('auth-otp-input').value = '';
+                    document.getElementById('auth-otp-input').focus();
+                } else {
+                    alert(`❌ ${resData.message || 'Authentication failed. Please verify your credentials.'}`);
+                }
+            } catch (err) {
+                console.error("Connect error:", err);
+                alert("❌ Cannot reach the Trade Hub server.\n\nMake sure algo.py is running. Error: " + err.message);
+            } finally {
+                connectBtn.innerText = originalText;
+                connectBtn.disabled = false;
+            }
+        }
+
+        async function submitOTPVerification() {
+            const otp = document.getElementById('auth-otp-input').value.trim();
+            if (!otp) {
+                alert('Please enter verification OTP validation code.');
+                return;
+            }
+
+            const verifyBtn = document.getElementById('btn-otp-verify');
+            verifyBtn.innerText = 'Verifying...';
+            verifyBtn.disabled = true;
+
+            try {
+                const res = await fetch('/api/auth/verify-otp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ otp: otp })
+                });
+
+                if (res.ok) {
+                    document.getElementById('auth-screen').style.display = 'none';
+                    document.getElementById('app-screen').style.display = 'block';
+                    fetchAppState();
+                } else {
+                    const err = await res.json();
+                    alert(`OTP Verification Failed: ${err.message || 'Please check your inputs and try again.'}`);
+                }
+            } catch (err) {
+                console.error("OTP check error:", err);
+                alert("MFA server connection timeout.");
+            } finally {
+                verifyBtn.innerText = 'Verify & Launch Software';
+                verifyBtn.disabled = false;
+            }
+        }
+
+        // Dynamic Themes Config
+        const themes = {
+            retro: {
+                '--bg-color': '#080a10',
+                '--bg-gradient': 'radial-gradient(circle at 50% 0%, #15100a 0%, #080a10 85%)',
+                '--card-bg': 'rgba(12, 14, 20, 0.82)',
+                '--card-border': 'rgba(184, 96, 43, 0.12)',
+                '--card-border-glow': 'rgba(184, 96, 43, 0.45)',
+                '--accent-color': '#b8602b',
+                '--accent-color-hover': '#cf6f34',
+                '--accent-glow': 'rgba(184, 96, 43, 0.35)',
+                '--badge-buy-bg': '#0b3a2f',
+                '--badge-buy-border': 'rgba(16, 185, 129, 0.45)',
+                '--badge-buy-text': '#4ade80',
+                '--badge-sell-bg': '#4f1d14',
+                '--badge-sell-border': 'rgba(239, 68, 68, 0.45)',
+                '--badge-sell-text': '#fb923c',
+                '--console-bg': '#010103',
+                '--console-text': '#4ade80',
+                '--console-ts': 'rgba(74, 222, 128, 0.5)',
+                '--btn-retro-outline-text': '#fb923c',
+                '--btn-retro-outline-border': 'rgba(184, 96, 43, 0.6)',
+                '--btn-retro-outline-bg-hover': 'rgba(184, 96, 43, 0.12)',
+                '--strat-badge-bg': 'linear-gradient(135deg, #8c431d, #b8602b)',
+                '--header-trim': 'none'
+            },
+            obsidian: {
+                '--bg-color': '#05060b',
+                '--bg-gradient': 'radial-gradient(circle at 50% 0%, #0c081f 0%, #05060b 85%)',
+                '--card-bg': 'rgba(10, 11, 20, 0.85)',
+                '--card-border': 'rgba(99, 102, 241, 0.15)',
+                '--card-border-glow': 'rgba(99, 102, 241, 0.5)',
+                '--accent-color': '#6366f1',
+                '--accent-color-hover': '#818cf8',
+                '--accent-glow': 'rgba(99, 102, 241, 0.35)',
+                '--badge-buy-bg': '#052e16',
+                '--badge-buy-border': 'rgba(34, 197, 94, 0.45)',
+                '--badge-buy-text': '#4ade80',
+                '--badge-sell-bg': '#450a0a',
+                '--badge-sell-border': 'rgba(239, 68, 68, 0.45)',
+                '--badge-sell-text': '#f87171',
+                '--console-bg': '#05060f',
+                '--console-text': '#818cf8',
+                '--console-ts': 'rgba(129, 140, 248, 0.5)',
+                '--btn-retro-outline-text': '#a5b4fc',
+                '--btn-retro-outline-border': 'rgba(99, 102, 241, 0.6)',
+                '--btn-retro-outline-bg-hover': 'rgba(99, 102, 241, 0.12)',
+                '--strat-badge-bg': 'linear-gradient(135deg, #4f46e5, #6366f1)',
+                '--header-trim': 'none'
+            },
+            aurora: {
+                '--bg-color': '#030705',
+                '--bg-gradient': 'linear-gradient(180deg, #052212 0%, #030705 100%)',
+                '--card-bg': 'rgba(8, 22, 16, 0.88)',
+                '--card-border': 'rgba(16, 185, 129, 0.2)',
+                '--card-border-glow': 'rgba(0, 201, 167, 0.6)',
+                '--accent-color': '#00c9a7',
+                '--accent-color-hover': '#34d399',
+                '--accent-glow': 'rgba(0, 201, 167, 0.35)',
+                '--badge-buy-bg': '#042c1b',
+                '--badge-buy-border': 'rgba(0, 201, 167, 0.45)',
+                '--badge-buy-text': '#00c9a7',
+                '--badge-sell-bg': '#3c1c14',
+                '--badge-sell-border': 'rgba(239, 68, 68, 0.45)',
+                '--badge-sell-text': '#fb923c',
+                '--console-bg': '#010403',
+                '--console-text': '#00c9a7',
+                '--console-ts': 'rgba(0, 201, 167, 0.5)',
+                '--btn-retro-outline-text': '#00c9a7',
+                '--btn-retro-outline-border': 'rgba(0, 201, 167, 0.6)',
+                '--btn-retro-outline-bg-hover': 'rgba(0, 201, 167, 0.12)',
+                '--strat-badge-bg': 'linear-gradient(135deg, #0f5132, #00c9a7)',
+                '--header-trim': '4px solid #8c431d'
+            },
+            glacier: {
+                '--bg-color': '#020617',
+                '--bg-gradient': 'radial-gradient(circle at 50% 0%, #082f49 0%, #020617 85%)',
+                '--card-bg': 'rgba(9, 15, 29, 0.88)',
+                '--card-border': 'rgba(14, 165, 233, 0.15)',
+                '--card-border-glow': 'rgba(14, 165, 233, 0.55)',
+                '--accent-color': '#0ea5e9',
+                '--accent-color-hover': '#38bdf8',
+                '--accent-glow': 'rgba(14, 165, 233, 0.35)',
+                '--badge-buy-bg': '#082f49',
+                '--badge-buy-border': 'rgba(56, 189, 248, 0.45)',
+                '--badge-buy-text': '#38bdf8',
+                '--badge-sell-bg': '#31102f',
+                '--badge-sell-border': 'rgba(244, 63, 94, 0.45)',
+                '--badge-sell-text': '#fb7185',
+                '--console-bg': '#01040f',
+                '--console-text': '#38bdf8',
+                '--console-ts': 'rgba(56, 189, 248, 0.5)',
+                '--btn-retro-outline-text': '#bae6fd',
+                '--btn-retro-outline-border': 'rgba(14, 165, 233, 0.6)',
+                '--btn-retro-outline-bg-hover': 'rgba(14, 165, 233, 0.12)',
+                '--strat-badge-bg': 'linear-gradient(135deg, #0284c7, #0ea5e9)',
+                '--header-trim': 'none'
+            },
+            cyberpunk: {
+                '--bg-color': '#08020f',
+                '--bg-gradient': 'radial-gradient(circle at 50% 0%, #2e0854 0%, #08020f 85%)',
+                '--card-bg': 'rgba(15, 7, 28, 0.88)',
+                '--card-border': 'rgba(217, 70, 239, 0.15)',
+                '--card-border-glow': 'rgba(217, 70, 239, 0.65)',
+                '--accent-color': '#d946ef',
+                '--accent-color-hover': '#f472b6',
+                '--accent-glow': 'rgba(217, 70, 239, 0.35)',
+                '--badge-buy-bg': '#1e1b4b',
+                '--badge-buy-border': 'rgba(129, 140, 248, 0.45)',
+                '--badge-buy-text': '#818cf8',
+                '--badge-sell-bg': '#4c0519',
+                '--badge-sell-border': 'rgba(251, 113, 133, 0.45)',
+                '--badge-sell-text': '#fb7185',
+                '--console-bg': '#05010b',
+                '--console-text': '#e879f9',
+                '--console-ts': 'rgba(232, 121, 249, 0.5)',
+                '--btn-retro-outline-text': '#f472b6',
+                '--btn-retro-outline-border': 'rgba(217, 70, 239, 0.6)',
+                '--btn-retro-outline-bg-hover': 'rgba(217, 70, 239, 0.12)',
+                '--strat-badge-bg': 'linear-gradient(135deg, #c084fc, #d946ef)',
+                '--header-trim': 'none'
+            }
+        };
+
+        function selectTheme(themeName) {
+            const themeData = themes[themeName];
+            if (!themeData) return;
+
+            const root = document.documentElement;
+            Object.keys(themeData).forEach(key => {
+                root.style.setProperty(key, themeData[key]);
+            });
+
+            // Update active state in UI
+            document.querySelectorAll('.theme-option').forEach(opt => {
+                opt.classList.remove('active');
+            });
+            const selectedOpt = document.getElementById(`theme-opt-${themeName}`);
+            if (selectedOpt) {
+                selectedOpt.classList.add('active');
+            }
+
+            // Update center navbar badge with theme name
+            const labelMap = {
+                retro: 'Retro Tech Theme',
+                obsidian: 'Obsidian Pro Theme',
+                aurora: 'Neon Aurora Theme',
+                glacier: 'Glacier Oceanic Theme',
+                cyberpunk: 'Cyber Synth Theme'
+            };
+            const themeLabel = document.getElementById('navbar-theme-label');
+            if (themeLabel && labelMap[themeName]) {
+                themeLabel.innerText = labelMap[themeName];
+                // Match the glow with theme accent
+                themeLabel.style.color = themeData['--accent-color'];
+                themeLabel.style.textShadow = `0 0 12px ${themeData['--accent-glow']}`;
+            }
+
+            // Save choice
+            localStorage.setItem('trade_hub_theme', themeName);
+        }
+
+        function toggleThemeDrawer() {
+            const drawer = document.getElementById('theme-drawer');
+            const overlay = document.getElementById('theme-drawer-overlay');
+            if (drawer.classList.contains('show')) {
+                drawer.classList.remove('show');
+                overlay.classList.remove('show');
+            } else {
+                drawer.classList.add('show');
+                overlay.classList.add('show');
+            }
+        }
+
+        // Render positions and orders helper functions removed
+
+        // Initialize saved theme on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            const savedTheme = localStorage.getItem('trade_hub_theme') || 'retro';
+            selectTheme(savedTheme);
+        });
+    </script>
+    <datalist id="symbol-list"></datalist>
+    <datalist id="expiry-list"></datalist>
+</body>
+</html>
