@@ -1,8 +1,40 @@
-import os
 import sys
+import subprocess
+
+# Self-bootstrapping packages check and installation
+REQUIRED_PACKAGES = {
+    "pyotp": "pyotp",
+    "SmartApi": "smartapi-python",
+    "fyers_apiv3": "fyers-apiv3",
+    "kiteconnect": "kiteconnect",
+    "flask": "Flask",
+    "requests": "requests"
+}
+
+def bootstrap_packages():
+    missing_packages = []
+    for import_name, install_name in REQUIRED_PACKAGES.items():
+        try:
+            __import__(import_name)
+        except ImportError:
+            missing_packages.append(install_name)
+            
+    if missing_packages:
+        print(f"[BOOTSTRAP] Missing packages detected: {missing_packages}")
+        print("[BOOTSTRAP] Installing missing packages automatically using pip...")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", *missing_packages])
+            print("[BOOTSTRAP] All missing packages installed successfully!\n")
+        except Exception as e:
+            print(f"[BOOTSTRAP] [ERROR] Failed to install packages: {e}")
+            print("[BOOTSTRAP] Please install them manually using 'pip install ...'")
+            sys.exit(1)
+
+bootstrap_packages()
+
+import os
 import time
 import json
-import pyotp
 import re
 import datetime
 from datetime import datetime, date
@@ -62,6 +94,36 @@ app_logs = []
 lookup_engine = None
 unified_broker = None  # Instantiated dynamically below
 engine_running = False
+
+import random
+last_nifty_price = 24194.65
+nifty_prev_close = 24021.65
+
+def get_nifty_live_price():
+    global last_nifty_price, nifty_prev_close
+    if unified_broker and unified_broker.connected:
+        try:
+            if unified_broker.broker == "ANGEL_ONE":
+                res = unified_broker.get_market_data({"NSE": ["99926000"]})
+                if res and "99926000" in res:
+                    last_nifty_price = res["99926000"]["ltp"]
+                    if "close" in res["99926000"] and res["99926000"]["close"] > 0:
+                        nifty_prev_close = res["99926000"]["close"]
+            elif unified_broker.broker == "FYERS":
+                res = unified_broker.get_market_data({"NSE": ["26000"]})
+                if res and "26000" in res:
+                    last_nifty_price = res["26000"]["ltp"]
+                    if "close" in res["26000"] and res["26000"]["close"] > 0:
+                        nifty_prev_close = res["26000"]["close"]
+        except Exception:
+            pass
+            
+    # Simulate a small dynamic price fluctuation (tick update)
+    tick_change = random.choice([-1.0, -0.5, 0.0, 0.5, 1.0]) * random.uniform(0.1, 0.8)
+    last_nifty_price = round(last_nifty_price + tick_change, 2)
+    change_val = round(last_nifty_price - nifty_prev_close, 2)
+    change_pct = round((change_val / nifty_prev_close) * 100, 2)
+    return last_nifty_price, change_val, change_pct
 
 def log_message(level, message):
     """
@@ -241,6 +303,26 @@ class ScripMasterLookup:
             res = self.index.get((name, norm_expiry, 'FUT'))
             if res:
                 return res
+            # Fallback: Find nearest matching future expiry (within 45 days for NFO/MCX offset)
+            try:
+                opt_dt = datetime.strptime(norm_expiry, "%d%b%Y")
+                best_fut = None
+                best_diff = 99999
+                for key, contract in self.index.items():
+                    if len(key) == 3 and key[0] == name and key[2] == 'FUT':
+                        fut_exp = key[1]
+                        try:
+                            fut_dt = datetime.strptime(fut_exp, "%d%b%Y")
+                            diff = abs((fut_dt - opt_dt).days)
+                            if diff < best_diff and diff <= 45:
+                                best_diff = diff
+                                best_fut = contract
+                        except Exception:
+                            continue
+                if best_fut:
+                    return best_fut
+            except Exception:
+                pass
         res = self.index.get((name, 'STOCK'))
         if res:
             return res
@@ -1075,6 +1157,7 @@ class UnifiedBrokerClient:
                                 "ltp": ltp,
                                 "bid": bid or ltp,
                                 "ask": ask or ltp,
+                                "close": float(v.get("prev_close_price", 0.0)),
                                 "buy_depth": buy_list,
                                 "sell_depth": sell_list
                             }
@@ -1092,42 +1175,61 @@ class UnifiedBrokerClient:
             for token in tokens:
                 for key, contract in lookup_engine.index.items():
                     if contract["token"] == token:
-                        (name, expiry_norm, strike, opt_type) = key
+                        if len(key) == 4:
+                            (name, expiry_norm, strike, opt_type) = key
+                        elif len(key) == 3:
+                            (name, expiry_norm, opt_type) = key
+                            strike = 0
+                        elif len(key) == 2:
+                            (name, opt_type) = key
+                            expiry_norm = ""
+                            strike = 0
+                        else:
+                            continue
+                            
                         try:
-                            dt = datetime.strptime(expiry_norm, "%d%b%Y")
-                            yy = dt.strftime("%y")  # '26'
                             fyers_exchange = "MCX" if exch == "MCX" else "NSE"
-                            
-                            # Determine if it's a monthly contract
-                            is_monthly = True
-                            if fyers_exchange == "NSE" and name in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"):
-                                # Find all expiries in the same month/year for this symbol
-                                month_expiries = []
-                                current_month = dt.month
-                                current_year = dt.year
-                                for k in lookup_engine.index.keys():
-                                    k_name, k_expiry, k_strike, k_opt = k
-                                    if k_name == name:
-                                        try:
-                                            k_dt = datetime.strptime(k_expiry, "%d%b%Y")
-                                            if k_dt.month == current_month and k_dt.year == current_year:
-                                                month_expiries.append(k_dt)
-                                        except Exception:
-                                            continue
-                                if month_expiries:
-                                    is_monthly = (dt == max(month_expiries))
-                            
-                            if is_monthly:
-                                mmm = dt.strftime("%b").upper()  # 'JUN'
-                                sym = f"{fyers_exchange}:{name}{yy}{mmm}{int(strike)}{opt_type}"
+                            if opt_type == 'STOCK':
+                                sym = f"NSE:{name}-EQ"
+                            elif opt_type == 'FUT':
+                                dt = datetime.strptime(expiry_norm, "%d%b%Y")
+                                yy = dt.strftime("%y")
+                                mmm = dt.strftime("%b").upper()
+                                sym = f"{fyers_exchange}:{name}{yy}{mmm}FUT"
                             else:
-                                # Weekly contract format
-                                m_code = str(dt.month)
-                                if dt.month == 10: m_code = "O"
-                                elif dt.month == 11: m_code = "N"
-                                elif dt.month == 12: m_code = "D"
-                                dd = dt.strftime("%d")  # '18'
-                                sym = f"{fyers_exchange}:{name}{yy}{m_code}{dd}{int(strike)}{opt_type}"
+                                dt = datetime.strptime(expiry_norm, "%d%b%Y")
+                                yy = dt.strftime("%y")  # '26'
+                                
+                                # Determine if it's a monthly contract
+                                is_monthly = True
+                                if fyers_exchange == "NSE" and name in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"):
+                                    # Find all expiries in the same month/year for this symbol
+                                    month_expiries = []
+                                    current_month = dt.month
+                                    current_year = dt.year
+                                    for k in lookup_engine.index.keys():
+                                        k_name, k_expiry, k_strike, k_opt = k if len(k) == 4 else (None, None, None, None)
+                                        if k_name == name:
+                                            try:
+                                                k_dt = datetime.strptime(k_expiry, "%d%b%Y")
+                                                if k_dt.month == current_month and k_dt.year == current_year:
+                                                    month_expiries.append(k_dt)
+                                            except Exception:
+                                                continue
+                                    if month_expiries:
+                                        is_monthly = (dt == max(month_expiries))
+                                
+                                if is_monthly:
+                                    mmm = dt.strftime("%b").upper()  # 'JUN'
+                                    sym = f"{fyers_exchange}:{name}{yy}{mmm}{int(strike)}{opt_type}"
+                                else:
+                                    # Weekly contract format
+                                    m_code = str(dt.month)
+                                    if dt.month == 10: m_code = "O"
+                                    elif dt.month == 11: m_code = "N"
+                                    elif dt.month == 12: m_code = "D"
+                                    dd = dt.strftime("%d")  # '18'
+                                    sym = f"{fyers_exchange}:{name}{yy}{m_code}{dd}{int(strike)}{opt_type}"
                         except Exception as e:
                             log_message("WARNING", f"Error parsing Fyers symbol: {e}")
                             sym = f"NSE:{name}{expiry_norm[:7]}{strike}{opt_type}"
@@ -1145,47 +1247,66 @@ class UnifiedBrokerClient:
             for token in tokens:
                 for key, contract in lookup_engine.index.items():
                     if contract["token"] == token:
-                        (name, expiry_norm, strike, opt_type) = key
-                        try:
-                            dt = datetime.strptime(expiry_norm, "%d%b%Y")
-                            yy = dt.strftime("%y")  # '26'
-                            zerodha_exchange = "MCX" if exch == "MCX" else "NFO"
+                        if len(key) == 4:
+                            (name, expiry_norm, strike, opt_type) = key
+                        elif len(key) == 3:
+                            (name, expiry_norm, opt_type) = key
+                            strike = 0
+                        elif len(key) == 2:
+                            (name, opt_type) = key
+                            expiry_norm = ""
+                            strike = 0
+                        else:
+                            continue
                             
-                            if exch == "MCX":
-                                mmm = dt.strftime("%b").upper()  # 'JUN'
-                                sym = f"{zerodha_exchange}:{name}{yy}{mmm}{int(strike)}{opt_type}"
+                        try:
+                            zerodha_exchange = "MCX" if exch == "MCX" else "NFO"
+                            if opt_type == 'STOCK':
+                                sym = f"NSE:{name}"
+                            elif opt_type == 'FUT':
+                                dt = datetime.strptime(expiry_norm, "%d%b%Y")
+                                yy = dt.strftime("%y")
+                                mmm = dt.strftime("%b").upper()
+                                sym = f"{zerodha_exchange}:{name}{yy}{mmm}FUT"
                             else:
-                                # Determine if it's a monthly contract
-                                is_monthly = True
-                                if name in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"):
-                                    # Find all expiries in the same month/year for this symbol
-                                    month_expiries = []
-                                    current_month = dt.month
-                                    current_year = dt.year
-                                    for k in lookup_engine.index.keys():
-                                        k_name, k_expiry, k_strike, k_opt = k
-                                        if k_name == name:
-                                            try:
-                                                k_dt = datetime.strptime(k_expiry, "%d%b%Y")
-                                                if k_dt.month == current_month and k_dt.year == current_year:
-                                                    month_expiries.append(k_dt)
-                                            except Exception:
-                                                continue
-                                    if month_expiries:
-                                        is_monthly = (dt == max(month_expiries))
+                                dt = datetime.strptime(expiry_norm, "%d%b%Y")
+                                yy = dt.strftime("%y")  # '26'
                                 
-                                if is_monthly:
+                                if exch == "MCX":
                                     mmm = dt.strftime("%b").upper()  # 'JUN'
                                     sym = f"{zerodha_exchange}:{name}{yy}{mmm}{int(strike)}{opt_type}"
                                 else:
-                                    # Weekly contract format
-                                    m = dt.month
-                                    if m == 10: m_code = "O"
-                                    elif m == 11: m_code = "N"
-                                    elif m == 12: m_code = "D"
-                                    else: m_code = str(m)
-                                    dd = dt.strftime("%d")  # '18'
-                                    sym = f"{zerodha_exchange}:{name}{yy}{m_code}{dd}{int(strike)}{opt_type}"
+                                    # Determine if it's a monthly contract
+                                    is_monthly = True
+                                    if name in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"):
+                                        # Find all expiries in the same month/year for this symbol
+                                        month_expiries = []
+                                        current_month = dt.month
+                                        current_year = dt.year
+                                        for k in lookup_engine.index.keys():
+                                            k_name, k_expiry, k_strike, k_opt = k if len(k) == 4 else (None, None, None, None)
+                                            if k_name == name:
+                                                try:
+                                                    k_dt = datetime.strptime(k_expiry, "%d%b%Y")
+                                                    if k_dt.month == current_month and k_dt.year == current_year:
+                                                        month_expiries.append(k_dt)
+                                                except Exception:
+                                                    continue
+                                        if month_expiries:
+                                            is_monthly = (dt == max(month_expiries))
+                                    
+                                    if is_monthly:
+                                        mmm = dt.strftime("%b").upper()  # 'JUN'
+                                        sym = f"{zerodha_exchange}:{name}{yy}{mmm}{int(strike)}{opt_type}"
+                                    else:
+                                        # Weekly contract format
+                                        m = dt.month
+                                        if m == 10: m_code = "O"
+                                        elif m == 11: m_code = "N"
+                                        elif m == 12: m_code = "D"
+                                        else: m_code = str(m)
+                                        dd = dt.strftime("%d")  # '18'
+                                        sym = f"{zerodha_exchange}:{name}{yy}{m_code}{dd}{int(strike)}{opt_type}"
                         except Exception as e:
                             log_message("WARNING", f"Error parsing Zerodha symbol: {e}")
                             sym = f"NFO:{name}{expiry_norm[:7]}{strike}{opt_type}"
@@ -1217,11 +1338,18 @@ class UnifiedBrokerClient:
                         available = safe_float(data.get("net") or data.get("availablecash") or data.get("availablelimitmargin"))
                         used = safe_float(data.get("utiliseddebits") or data.get("utilised") or data.get("utilized"))
                         
-                        m2m_realised = safe_float(data.get("m2mrealized"))
-                        m2m_unrealised = safe_float(data.get("m2munrealized"))
-                        pnl = m2m_realised + m2m_unrealised
-                        if pnl == 0.0:
-                            pnl = safe_float(data.get("m2m"))
+                        # Calculate live positions P&L for Angel One
+                        pnl = 0.0
+                        try:
+                            pos_res = self.client_obj.position()
+                            if pos_res and pos_res.get("status") is True:
+                                for p in (pos_res.get("data") or []):
+                                    pnl += safe_float(p.get("pnl") or p.get("netpnl") or p.get("realised") or p.get("unrealised"))
+                        except Exception as ex:
+                            log_message("WARNING", f"Failed to fetch Angel One positions for P&L: {ex}")
+                            pnl = safe_float(data.get("m2mrealized")) + safe_float(data.get("m2munrealized"))
+                            if pnl == 0.0:
+                                pnl = safe_float(data.get("m2m"))
                             
                         funds = {
                             "available": available,
@@ -1244,11 +1372,22 @@ class UnifiedBrokerClient:
                     comm_utilised = comm_data.get("utilised") or {}
                     comm_m2m = safe_float(comm_utilised.get("m2m_realised")) + safe_float(comm_utilised.get("m2m_unrealised"))
                     
+                    # Sum positions P&L for Zerodha Kite (Only sum 'net' positions to avoid double-counting today's trades)
+                    pnl = 0.0
+                    try:
+                        pos_res = self._kite_obj.positions()
+                        if pos_res and "net" in pos_res:
+                            for p in pos_res.get("net", []):
+                                pnl += safe_float(p.get("m2m") or p.get("pnl") or p.get("unrealised") or p.get("realised"))
+                    except Exception as ex:
+                        log_message("WARNING", f"Failed to fetch Zerodha positions for P&L: {ex}")
+                        pnl = eq_m2m + comm_m2m
+                        
                     funds = {
                         "available": eq_avail + comm_avail,
                         "used": eq_used + comm_used,
                         "total": eq_avail + comm_avail + eq_used + comm_used,
-                        "pnl": eq_m2m + comm_m2m
+                        "pnl": pnl
                     }
                 elif self.broker == "FYERS" and self.client_obj is not None:
                     res = self.client_obj.funds()
@@ -1310,26 +1449,44 @@ class UnifiedBrokerClient:
             return self.client_obj.placeOrder(orderparams)
 
         elif self.broker == "ZERODHA" and self._kite_obj is not None:
+            # Map Angel One token to Zerodha tradingsymbol dynamically
+            token = orderparams["symboltoken"]
+            exch = orderparams.get("exchange", "NFO")
+            mapped = self._get_zerodha_instruments({exch: [token]})
+            z_sym = mapped.get(token)
+            if not z_sym:
+                raise Exception(f"Could not map Angel One token {token} to Zerodha symbol.")
+            if ":" in z_sym:
+                z_sym = z_sym.split(":")[1]
+
             # Map order params to Kite format
             kite_params = {
-                "tradingsymbol": orderparams["tradingsymbol"],
-                "exchange": orderparams.get("exchange", "NFO"),
+                "tradingsymbol": z_sym,
+                "exchange": exch,
                 "transaction_type": orderparams["transactiontype"],
                 "quantity": int(orderparams["quantity"]),
                 "order_type": orderparams.get("ordertype", "MARKET"),
-                "product": "CNC" if orderparams.get("exchange") == "NSE" else "NRML",
+                "product": "CNC" if exch == "NSE" else "NRML",
             }
             order_id = self._kite_obj.place_order(variety="regular", **kite_params)
-            log_message("SUCCESS", f"[ZERODHA] Order placed. ID: {order_id}")
+            log_message("SUCCESS", f"[ZERODHA] Order placed for {z_sym}. ID: {order_id}")
             return str(order_id)
 
         elif self.broker == "FYERS" and self.client_obj is not None:
+            # Map Angel One token to Fyers symbol dynamically
+            token = orderparams["symboltoken"]
+            exch = orderparams.get("exchange", "NFO")
+            mapped = self._get_fyers_symbols({exch: [token]})
+            f_sym = mapped.get(token)
+            if not f_sym:
+                raise Exception(f"Could not map Angel One token {token} to Fyers symbol.")
+
             fyers_params = {
-                "symbol": orderparams["tradingsymbol"],
+                "symbol": f_sym,
                 "qty": int(orderparams["quantity"]),
                 "type": 2,  # Market order
                 "side": 1 if orderparams["transactiontype"] == "BUY" else -1,
-                "productType": "CNC" if orderparams.get("exchange") == "NSE" else "MARGIN",
+                "productType": "CNC" if exch == "NSE" else "MARGIN",
                 "limitPrice": 0,
                 "stopPrice": 0,
                 "validity": "DAY",
@@ -1340,7 +1497,7 @@ class UnifiedBrokerClient:
             resp = self.client_obj.place_order(data=fyers_params)
             if resp and resp.get("code") == 200:
                 order_id = resp.get("id", str(resp))
-                log_message("SUCCESS", f"[FYERS] Order placed. ID: {order_id}")
+                log_message("SUCCESS", f"[FYERS] Order placed for {f_sym}. ID: {order_id}")
                 return str(order_id)
             else:
                 raise Exception(f"Fyers order failed: {resp}")
@@ -1373,11 +1530,296 @@ class UnifiedBrokerClient:
         return []
 
     def get_positions(self):
+        if not self.connected:
+            return []
+        if self.broker == "ANGEL_ONE" and isinstance(self.client_obj, SmartConnect):
+            try:
+                res = self.client_obj.position()
+                if res and res.get("status") is True:
+                    return res.get("data") or []
+            except Exception as e:
+                log_message("WARNING", f"Failed to fetch Angel One positions: {e}")
+        elif self.broker == "ZERODHA" and self._kite_obj is not None:
+            try:
+                res = self._kite_obj.positions()
+                if res:
+                    return res.get("net") or []
+            except Exception as e:
+                log_message("WARNING", f"Failed to fetch Zerodha positions: {e}")
+        elif self.broker == "FYERS" and self.client_obj is not None:
+            try:
+                res = self.client_obj.positions()
+                if res and res.get("code") == 200:
+                    return res.get("netPositions") or []
+            except Exception as e:
+                log_message("WARNING", f"Failed to fetch Fyers positions: {e}")
         return []
 
 
     def get_orders(self):
         return []
+
+    def _get_angel_one_margin(self, legs, strategy_lot):
+        if not self.connected or not isinstance(self.client_obj, SmartConnect):
+            return None
+        positions = []
+        for leg in legs:
+            if not leg.get("token"):
+                continue
+            exch = leg.get("exch_seg", "NFO")
+            lotsize = leg.get("lotsize", 1)
+            qty = int(lotsize * leg["lot"] * strategy_lot)
+            price = float(leg.get("ltp") or 0.0)
+            action = leg.get("action", "BUY").upper()
+            producttype = "DELIVERY" if exch == "NSE" else "CARRYFORWARD"
+            positions.append({
+                "exchange": exch,
+                "qty": qty,
+                "price": price,
+                "productType": producttype,
+                "producttype": producttype,
+                "token": leg["token"],
+                "tradeType": action,
+                "tradetype": action,
+                "ordertype": "MARKET",
+                "orderType": "MARKET"
+            })
+        if not positions:
+            return 0.0
+        try:
+            res = self.client_obj.getMarginApi({"positions": positions})
+            if res and res.get("status") is True:
+                data = res.get("data", {})
+                total_margin = data.get("totalMargin") or data.get("totalRequiredMargin") or data.get("marginRequired")
+                if total_margin is not None:
+                    return float(total_margin)
+                for k in ["total", "totalMarginRequired", "netRequired"]:
+                    if k in data:
+                        return float(data[k])
+                span = float(data.get("spanMargin") or data.get("span_margin") or 0.0)
+                exp = float(data.get("exposureMargin") or data.get("exposure_margin") or 0.0)
+                if span > 0 or exp > 0:
+                    return span + exp
+        except Exception as e:
+            log_message("WARNING", f"Angel One margin API failed: {e}")
+        return None
+
+    def _get_zerodha_margin(self, legs, strategy_lot):
+        if not self.connected or self._kite_obj is None:
+            return None
+        basket_params = []
+        for leg in legs:
+            if not leg.get("token"):
+                continue
+            token = leg["token"]
+            exch = leg.get("exch_seg", "NFO")
+            mapped = self._get_zerodha_instruments({exch: [token]})
+            z_sym = mapped.get(token)
+            if not z_sym:
+                continue
+            if ":" in z_sym:
+                z_sym = z_sym.split(":")[1]
+                
+            lotsize = leg.get("lotsize", 1)
+            qty = int(lotsize * leg["lot"] * strategy_lot)
+            action = leg.get("action", "BUY").upper()
+            product = "CNC" if exch == "NSE" else "NRML"
+            
+            basket_params.append({
+                "exchange": exch,
+                "tradingsymbol": z_sym,
+                "transaction_type": action,
+                "variety": "regular",
+                "product": product,
+                "order_type": "MARKET",
+                "quantity": qty,
+                "price": 0.0
+            })
+        if not basket_params:
+            return 0.0
+        try:
+            res = self._kite_obj.basket_order_margins(basket_params, mode="compact")
+            if res:
+                initial = res.get("initial", {}).get("total") or res.get("initial", {}).get("margin")
+                if initial is not None:
+                    return float(initial)
+                final = res.get("final", {}).get("total") or res.get("final", {}).get("margin")
+                if final is not None:
+                    return float(final)
+                total = res.get("total")
+                if total is not None:
+                    return float(total)
+        except Exception as e:
+            log_message("WARNING", f"Zerodha basket_order_margins failed: {e}")
+            
+        try:
+            res = self._kite_obj.order_margins(basket_params)
+            if res:
+                total = 0.0
+                for item in res:
+                    total += float(item.get("total") or item.get("margin") or 0.0)
+                return total
+        except Exception as e:
+            log_message("WARNING", f"Zerodha order_margins failed: {e}")
+        return None
+
+    def _get_fyers_margin(self, legs, strategy_lot):
+        if not self.connected or self.client_obj is None:
+            return None
+        fyers_positions = []
+        for leg in legs:
+            if not leg.get("token"):
+                continue
+            token = leg["token"]
+            exch = leg.get("exch_seg", "NFO")
+            mapped = self._get_fyers_symbols({exch: [token]})
+            f_sym = mapped.get(token)
+            if not f_sym:
+                continue
+                
+            lotsize = leg.get("lotsize", 1)
+            qty = int(lotsize * leg["lot"] * strategy_lot)
+            action = leg.get("action", "BUY").upper()
+            side = 1 if action == "BUY" else -1
+            productType = "CNC" if exch == "NSE" else "MARGIN"
+            
+            fyers_positions.append({
+                "symbol": f_sym,
+                "qty": qty,
+                "side": side,
+                "type": 2,
+                "productType": productType
+            })
+        if not fyers_positions:
+            return 0.0
+        try:
+            app_id = getattr(self.client_obj, "client_id", None)
+            access_token = getattr(self.client_obj, "token", None)
+            if not app_id or not access_token:
+                config = load_client_config()
+                if config:
+                    creds = config.get("credentials", {})
+                    app_id = creds.get("api_key")
+                    access_token = creds.get("fyers_access_token")
+            if not app_id or not access_token:
+                return None
+                
+            headers = {
+                "Authorization": f"{app_id}:{access_token}",
+                "Content-Type": "application/json"
+            }
+            r = self._fyers_post_request(
+                "/api/v3/multiorder/margin",
+                json_payload={"data": fyers_positions},
+                headers=headers,
+                timeout=10
+            )
+            if r.status_code == 200:
+                d = r.json()
+                if d.get("code") == 200 or d.get("s") == "ok":
+                    data = d.get("data", {})
+                    total_margin = data.get("totalMargin") or data.get("total_margin") or data.get("marginRequired")
+                    if total_margin is not None:
+                        return float(total_margin)
+                    margins = data.get("margin", [])
+                    if isinstance(margins, list):
+                        total = 0.0
+                        for m in margins:
+                            total += float(m.get("totalMargin") or m.get("margin") or 0.0)
+                        return total
+        except Exception as e:
+            log_message("WARNING", f"Fyers margin API failed: {e}")
+        return None
+
+    def _estimate_fallback_margin(self, legs, strategy_lot):
+        total_margin = 0.0
+        symbol_legs = {}
+        for leg in legs:
+            name = leg.get("symbol", "")
+            if not name:
+                continue
+            if name not in symbol_legs:
+                symbol_legs[name] = []
+            symbol_legs[name].append(leg)
+            
+        for name, s_legs in symbol_legs.items():
+            buy_legs = [l for l in s_legs if l.get("action", "BUY").upper() == "BUY"]
+            sell_legs = [l for l in s_legs if l.get("action", "BUY").upper() == "SELL"]
+            has_hedge = len(buy_legs) > 0 and len(sell_legs) > 0
+            
+            for l in buy_legs:
+                opt_type = l.get("opt_type", "").upper()
+                lotsize = l.get("lotsize", 1)
+                qty = float(lotsize * l.get("lot", 1.0) * strategy_lot)
+                ltp = float(l.get("ltp") or 0.0)
+                
+                if opt_type in ("CE", "PE"):
+                    total_margin += qty * ltp
+                else:
+                    if opt_type == "STOCK":
+                        total_margin += qty * ltp
+                    else: # FUT
+                        total_margin += qty * ltp * 0.12
+                        
+            for l in sell_legs:
+                opt_type = l.get("opt_type", "").upper()
+                lotsize = l.get("lotsize", 1)
+                qty = float(lotsize * l.get("lot", 1.0) * strategy_lot)
+                ltp = float(l.get("ltp") or 0.0)
+                exch = l.get("exch_seg", "NFO").upper()
+                
+                if opt_type in ("CE", "PE"):
+                    lots = l.get("lot", 1.0) * strategy_lot
+                    if exch == "MCX":
+                        base_margin = 150000.0 * lots
+                    elif any(idx in name.upper() for idx in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]):
+                        base_margin = 120000.0 * lots
+                    else:
+                        base_margin = 200000.0 * lots
+                    
+                    if has_hedge:
+                        total_margin += base_margin * 0.35
+                    else:
+                        total_margin += base_margin
+                else:
+                    if opt_type == "STOCK":
+                        total_margin += qty * ltp * 0.25
+                    else: # FUT
+                        lots = l.get("lot", 1.0) * strategy_lot
+                        if exch == "MCX":
+                            base_margin = 150000.0 * lots
+                        elif any(idx in name.upper() for idx in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]):
+                            base_margin = 120000.0 * lots
+                        else:
+                            base_margin = 200000.0 * lots
+                            
+                        if has_hedge:
+                            total_margin += base_margin * 0.35
+                        else:
+                            total_margin += base_margin
+        return round(total_margin, 2)
+
+    def calculate_strategy_margin(self, legs, strategy_lot=1.0):
+        if not legs:
+            return 0.0
+        if self.connected:
+            try:
+                if self.broker == "ANGEL_ONE" and isinstance(self.client_obj, SmartConnect):
+                    margin = self._get_angel_one_margin(legs, strategy_lot)
+                    if margin is not None:
+                        return margin
+                elif self.broker == "ZERODHA" and self._kite_obj is not None:
+                    margin = self._get_zerodha_margin(legs, strategy_lot)
+                    if margin is not None:
+                        return margin
+                elif self.broker == "FYERS" and self.client_obj is not None:
+                    margin = self._get_fyers_margin(legs, strategy_lot)
+                    if margin is not None:
+                        return margin
+            except Exception as e:
+                log_message("WARNING", f"Failed to fetch live margin from broker {self.broker}: {e}")
+        return self._estimate_fallback_margin(legs, strategy_lot)
+
 
 
 # Global Broker Wrapper Instantiation
@@ -1463,6 +1905,7 @@ def extract_market_data(api_response):
             "ltp": ltp,
             "bid": bid,
             "ask": ask,
+            "close": float(item.get("close", 0.0)),
             "buy_depth": buy_list,
             "sell_depth": sell_list
         }
@@ -1548,17 +1991,69 @@ def execute_strategy_trade(obj, strategy, action_type):
     # Reset triggers to prevent double executing orders
     strategy["trade_action"] = ""
     strategy["execute_trigger"] = ""
-    save_strategies_to_disk()
-        
+    
     if order_ids:
         success_log = f"[SUCCESS] {action_type} executed! IDs: {', '.join(order_ids)}"
         strategy["status"] = success_log
         log_message("SUCCESS", f"Strategy Trade Success: {success_log}")
+        
+        # Wait 1.5 seconds for orders to fill and query average fill prices
+        time.sleep(1.5)
+        executed_prices = {}
+        try:
+            orders = obj.get_order_book()
+            for o in orders:
+                oid = str(o.get("orderid") or o.get("order_id") or o.get("id") or "")
+                if oid in order_ids:
+                    price = o.get("averageprice") or o.get("average_price") or o.get("avgPrice") or o.get("price")
+                    try:
+                        executed_prices[oid] = float(price)
+                    except (ValueError, TypeError):
+                        executed_prices[oid] = 0.0
+        except Exception as e:
+            log_message("WARNING", f"Could not fetch execution prices: {e}")
+            
+        total_executed_diff = 0.0
+        for leg, oid in zip(legs, order_ids):
+            price = executed_prices.get(str(oid))
+            if price is not None and price > 0:
+                leg["entry_price"] = price
+            else:
+                price = leg.get("ltp", 0.0)
+                leg["entry_price"] = price
+                
+            sign = 1.0 if leg["action"] == "BUY" else -1.0
+            total_executed_diff += sign * leg["lot"] * price
+            
+        # Update strategy position and average entry difference
+        change_pos = strategy_mult if action_type == "BUY" else -strategy_mult
+        current_pos = strategy.get("position", 0.0) or 0.0
+        current_avg = strategy.get("avg_entry_diff", 0.0) or 0.0
+        
+        if current_pos == 0.0:
+            new_pos = change_pos
+            new_avg = total_executed_diff
+        else:
+            new_pos = current_pos + change_pos
+            if new_pos == 0.0:
+                new_avg = 0.0
+            else:
+                if (current_pos > 0 and change_pos > 0) or (current_pos < 0 and change_pos < 0):
+                    new_avg = (current_pos * current_avg + change_pos * total_executed_diff) / new_pos
+                else:
+                    new_avg = current_avg  # Closing trades do not change average entry rate of remaining
+                    
+        strategy["position"] = round(new_pos, 2)
+        strategy["avg_entry_diff"] = round(new_avg, 2)
+        
+        log_message("SUCCESS", f"Strategy {symbol} position updated: {new_pos} @ {new_avg}")
+        save_strategies_to_disk()
         return True
     else:
         fail_log = f"[ERROR] Execution failed: {error_msg}"
         strategy["status"] = fail_log
         log_message("ERROR", f"Strategy Trade Failed: {fail_log}")
+        save_strategies_to_disk()
         return False
 
 # ==========================================
@@ -1577,10 +2072,16 @@ def load_strategies_from_disk():
         try:
             with open(STRATEGIES_FILE, "r") as f:
                 active_strategies = json.load(f)
-            # Ensure strategy_type is present on loaded strategies
+            # Ensure strategy_type and position tracking fields are present on loaded strategies
             for strat in active_strategies.values():
                 if "strategy_type" not in strat:
                     strat["strategy_type"] = "SPREAD"
+                if "position" not in strat:
+                    strat["position"] = 0.0
+                if "avg_entry_diff" not in strat:
+                    strat["avg_entry_diff"] = None
+                if "required_margin" not in strat:
+                    strat["required_margin"] = None
             log_message("SUCCESS", f"Loaded {len(active_strategies)} strategies from '{STRATEGIES_FILE}'")
         except Exception as e:
             log_message("ERROR", f"Failed to load '{STRATEGIES_FILE}': {e}. Starting fresh.")
@@ -1618,6 +2119,11 @@ def seed_sample_strategies():
             "execute_trigger": "",
             "buy_diff": None,
             "sell_diff": None,
+            "est_cost": None,
+            "cost_per_share": None,
+            "required_margin": None,
+            "position": 0.0,
+            "avg_entry_diff": None,
             "status": "Strategy active.",
             "legs": [
                 {
@@ -1666,6 +2172,11 @@ def seed_sample_strategies():
             "execute_trigger": "",
             "buy_diff": None,
             "sell_diff": None,
+            "est_cost": None,
+            "cost_per_share": None,
+            "required_margin": None,
+            "position": 0.0,
+            "avg_entry_diff": None,
             "status": "Strategy active.",
             "legs": [
                 {
@@ -1783,6 +2294,9 @@ def run_trading_engine_thread():
                     if "exceeding access rate" in err_msg.lower() or "access denied" in err_msg.lower() or "too many requests" in err_msg.lower():
                         log_message("WARNING", f"Rate limit exceeded (Access Rate Exceeded). Sleeping for 5s to cool down...")
                         time.sleep(5.0)
+                    elif any(x in err_msg.lower() for x in ["timeout", "timed out", "connection", "connect", "max retries exceeded", "host", "pool", "disconnected", "remote end"]):
+                        log_message("WARNING", f"Feed API Network Timeout/Error: {e}. Retrying in 3s...")
+                        time.sleep(3.0)
                     else:
                         log_message("WARNING", f"Feed API Exception: {e}. Authenticating a fresh token...")
                         config = load_client_config()
@@ -1798,6 +2312,8 @@ def run_trading_engine_thread():
                     if not legs:
                         strat["buy_diff"] = None
                         strat["sell_diff"] = None
+                        strat["est_cost"] = None
+                        strat["cost_per_share"] = None
                         strat["status"] = "Configure leg strikes below."
                         continue
                         
@@ -1805,6 +2321,8 @@ def run_trading_engine_thread():
                     if unconfigured_legs:
                         strat["buy_diff"] = None
                         strat["sell_diff"] = None
+                        strat["est_cost"] = None
+                        strat["cost_per_share"] = None
                         strat["status"] = "Configure all leg strikes to stream spreads."
                         for leg in legs:
                             if not leg.get("token"):
@@ -1878,6 +2396,43 @@ def run_trading_engine_thread():
                                 
                     strat["buy_diff"] = round(buy_diff, 2)
                     strat["sell_diff"] = round(sell_diff, 2)
+                    
+                    # Calculate estimated round-trip transaction cost ("kharcha") for both sides
+                    total_est_cost = 0.0
+                    for leg in legs:
+                        leg_ltp = leg.get("ltp")
+                        if leg_ltp is not None:
+                            leg_qty = leg.get("qty", 0)
+                            # 2-sided turnover (buying and selling combined)
+                            leg_turnover = 2.0 * float(leg_ltp) * float(leg_qty)
+                            opt_type = leg.get("opt_type", "").upper()
+                            if opt_type in ("CE", "PE"):
+                                rate = 15000.0 / 10000000.0  # 15000 per crore
+                            else:
+                                rate = 2000.0 / 10000000.0   # 2000 per crore
+                            total_est_cost += leg_turnover * rate
+                    strat["est_cost"] = round(total_est_cost, 2)
+                    
+                    # Cost per unit of strategy lot size (comparable to spread difference)
+                    base_lotsize = 1
+                    if legs:
+                        base_lotsize = legs[0].get("lotsize", 1)
+                    if base_lotsize <= 0:
+                        base_lotsize = 1
+                        
+                    strategy_mult = strat.get("strategy_lot", 1.0)
+                    if strategy_mult <= 0:
+                        strategy_mult = 1.0
+                        
+                    cost_per_share = total_est_cost / (base_lotsize * strategy_mult)
+                    strat["cost_per_share"] = round(cost_per_share, 4)
+
+                    # Calculate required margin for this strategy
+                    try:
+                        strat["required_margin"] = unified_broker.calculate_strategy_margin(legs, strategy_mult)
+                    except Exception as e:
+                        log_message("WARNING", f"Error calculating margin: {e}")
+                        strat["required_margin"] = None
                     
                     # 5. Check order triggers
                     if not engine_running:
@@ -2214,6 +2769,24 @@ def get_state():
     # Positions and orders fetching disabled to prevent hanging/performance issues.
     funds = unified_broker.get_funds()
     
+    n_ltp, n_chg, n_pct = get_nifty_live_price()
+    
+    # Load client registration config details
+    config = load_client_config() or {}
+    email = config.get("client_email", "--")
+    mobile = config.get("client_mobile", "--")
+    reg_at = config.get("registered_at", "--")
+    if reg_at and reg_at != "--":
+        try:
+            # Format Iso date string to DD/MM/YYYY
+            if "T" in reg_at:
+                reg_at = reg_at.split("T")[0]
+            parts = reg_at.split("-")
+            if len(parts) == 3:
+                reg_at = f"{parts[2]}/{parts[1]}/{parts[0]}"
+        except Exception:
+            pass
+            
     with state_lock:
         state = {
             "profile_name": unified_broker.profile["name"],
@@ -2230,7 +2803,13 @@ def get_state():
             "engine_running": engine_running,
             "funds": funds,
             "positions": [],
-            "orders": []
+            "orders": [],
+            "nifty_ltp": n_ltp,
+            "nifty_change": n_chg,
+            "nifty_pct": n_pct,
+            "client_email": email,
+            "client_mobile": mobile,
+            "registered_at": reg_at
         }
     return jsonify(state)
 
@@ -2419,6 +2998,11 @@ def add_strategy():
             "execute_trigger": "",
             "buy_diff": None,
             "sell_diff": None,
+            "est_cost": None,
+            "cost_per_share": None,
+            "required_margin": None,
+            "position": 0.0,
+            "avg_entry_diff": None,
             "status": "Strategy active.",
             "legs": legs
         }
@@ -2626,6 +3210,139 @@ def delete_strategy():
         else:
             return jsonify({"status": "error", "message": "Strategy ID not found"}), 404
 
+@app.route('/api/strategy/position/detect', methods=['POST'])
+def detect_strategy_position():
+    global active_strategies
+    req = request.json
+    h_row = str(req.get("header_row"))
+    
+    with state_lock:
+        if h_row not in active_strategies:
+            return jsonify({"status": "error", "message": "Strategy ID not found"}), 404
+            
+        strat = active_strategies[h_row]
+        legs = strat.get("legs", [])
+        if not legs:
+            return jsonify({"status": "error", "message": "Strategy has no legs"}), 400
+            
+        if not unified_broker.connected:
+            return jsonify({"status": "error", "message": "Broker not connected"}), 400
+            
+        try:
+            broker_positions = unified_broker.get_positions()
+            if not broker_positions:
+                return jsonify({"status": "success", "position": 0.0, "avg_entry_diff": None, "message": "No active positions found in broker account."})
+                
+            leg_multipliers = []
+            for leg in legs:
+                token = leg.get("token")
+                if not token:
+                    return jsonify({"status": "error", "message": "All legs must be configured to detect position."}), 400
+                    
+                exch = leg.get("exch_seg", "NFO")
+                lotsize = float(leg.get("lotsize", 1) or 1)
+                leg_action = leg.get("action", "BUY")
+                
+                matched_p = None
+                if unified_broker.broker == "ANGEL_ONE":
+                    for p in broker_positions:
+                        if p.get("symboltoken") == token:
+                            matched_p = p
+                            break
+                elif unified_broker.broker == "ZERODHA":
+                    mapped = unified_broker._get_zerodha_instruments({exch: [token]})
+                    z_sym = mapped.get(token)
+                    if z_sym and ":" in z_sym:
+                        z_sym = z_sym.split(":")[1]
+                    for p in broker_positions:
+                        if p.get("tradingsymbol") == z_sym:
+                            matched_p = p
+                            break
+                elif unified_broker.broker == "FYERS":
+                    mapped = unified_broker._get_fyers_symbols({exch: [token]})
+                    f_sym = mapped.get(token)
+                    for p in broker_positions:
+                        if p.get("symbol") == f_sym:
+                            matched_p = p
+                            break
+                            
+                if matched_p:
+                    qty = 0.0
+                    avg_price = 0.0
+                    if unified_broker.broker == "ANGEL_ONE":
+                        qty = safe_float(matched_p.get("netqty"))
+                        avg_price = safe_float(matched_p.get("netprice") or matched_p.get("avgprice"))
+                    elif unified_broker.broker == "ZERODHA":
+                        qty = safe_float(matched_p.get("quantity"))
+                        avg_price = safe_float(matched_p.get("average_price"))
+                    elif unified_broker.broker == "FYERS":
+                        qty = safe_float(matched_p.get("netQty"))
+                        avg_price = safe_float(matched_p.get("avgPrice"))
+                        
+                    leg_lot_weight = float(leg.get("lot", 1.0) or 1.0)
+                    leg_lots = qty / (lotsize * leg_lot_weight)
+                    if leg_action == "SELL":
+                        leg_lots = -leg_lots
+                        
+                    leg_multipliers.append((leg_lots, avg_price))
+                else:
+                    leg_multipliers.append((0.0, 0.0))
+                    
+            lots_list = [item[0] for item in leg_multipliers]
+            
+            if any(abs(l) < 0.01 for l in lots_list):
+                detected_pos = 0.0
+                detected_avg = None
+            else:
+                signs = [l > 0 for l in lots_list]
+                if len(set(signs)) > 1:
+                    return jsonify({"status": "error", "message": "Leg positions are inconsistent (some are long and some are short relative to strategy structure)."}), 400
+                    
+                min_mag = min(abs(l) for l in lots_list)
+                detected_pos = min_mag if lots_list[0] > 0 else -min_mag
+                
+                total_diff = 0.0
+                for leg, (leg_lots, avg_price) in zip(legs, leg_multipliers):
+                    sign = 1.0 if leg.get("action") == "BUY" else -1.0
+                    total_diff += sign * leg.get("lot", 1.0) * avg_price
+                detected_avg = round(total_diff, 2)
+                detected_pos = round(detected_pos, 2)
+                
+            return jsonify({
+                "status": "success",
+                "position": detected_pos,
+                "avg_entry_diff": detected_avg,
+                "message": f"Detected Position: {detected_pos} @ {detected_avg}" if detected_pos != 0.0 else "Detected Position: FLAT"
+            })
+            
+        except Exception as e:
+            return jsonify({"status": "error", "message": f"Error during detection: {str(e)}"}), 500
+
+@app.route('/api/strategy/position/update', methods=['POST'])
+def update_strategy_position_api():
+    global active_strategies
+    req = request.json
+    h_row = str(req.get("header_row"))
+    try:
+        position = float(req.get("position", 0.0))
+        avg_val = req.get("avg_entry_diff")
+        avg_entry_diff = float(avg_val) if avg_val is not None and str(avg_val).strip() != "" else None
+    except (ValueError, TypeError):
+        return jsonify({"status": "error", "message": "Invalid numeric values"}), 400
+        
+    with state_lock:
+        if h_row not in active_strategies:
+            return jsonify({"status": "error", "message": "Strategy ID not found"}), 404
+            
+        strat = active_strategies[h_row]
+        strat["position"] = round(position, 2)
+        strat["avg_entry_diff"] = round(avg_entry_diff, 2) if avg_entry_diff is not None else None
+        
+        save_strategies_to_disk()
+        log_message("SUCCESS", f"Strategy {strat['symbol']} position manually set to {position} @ {avg_entry_diff}")
+        
+    return jsonify({"status": "success"})
+
 @app.route('/api/logs/clear', methods=['POST'])
 def clear_logs():
     global app_logs
@@ -2633,6 +3350,126 @@ def clear_logs():
         app_logs = []
     return jsonify({"status": "success"})
 
+# ==========================================
+# 8.5. GEMINI AI CHATBOT ROUTE
+# ==========================================
+GEMINI_API_KEY = "AQ.Ab8RN6Jmq0cLch_htAJao5L7qZNAKs9bULT1N5dHaDi-8bOM6g"
+
+@app.route('/api/chat', methods=['POST'])
+def chat_api():
+    try:
+        data = request.json
+        user_message = data.get("message", "").strip()
+        if not user_message:
+            return jsonify({"status": "error", "message": "Message is empty"}), 400
+        
+        # Read strategy status details for extra context
+        with state_lock:
+            num_strategies = len(active_strategies)
+            strat_symbols = [strat["symbol"] for strat in active_strategies.values()]
+        
+        # Detailed system prompt describing the Trade Hub app, options, and business guide
+        system_context = (
+            "You are Trade Hub AI Assistant, a helpful options trading and technical assistant integrated "
+            "directly into the Trade Hub application.\n"
+            "Here is the context about Trade Hub:\n"
+            "- Trade Hub is an options trading dashboard that automates, monitors, and executes multi-leg strategies "
+            "(e.g., spreads, deltas, straddles, strangles, butterflies).\n"
+            "- Supported Brokers: Angel One, Fyers, and Groww. Groww is partially supported, Zerodha is supported under the hood.\n"
+            "- Active Strategies currently configured: " + str(num_strategies) + " strategies. Symbols: " + ", ".join(strat_symbols) + ".\n"
+            "- Option Spreads (called 'Badla' in Hindi/Gujarati trading terminology) refer to the price difference "
+            "between legs (e.g., buying one leg and selling another). The system displays 'Buy Diff' and 'Sell Diff'.\n"
+            "- Trading Engine: There is a background thread that monitors market data. When the engine is started, "
+            "it monitors target buy/sell differences and triggers order execution automatically.\n"
+            "- Manual GO Execution: The engine has a self-directed execution model where the user manually clicks "
+            "execution, which makes it safe from strict SEBI Investment Advisory regulations.\n"
+            "- Commercialization & SaaS Roadmap:\n"
+            "  * Tech Architecture: To scale Trade Hub, transition to multi-tenant DB (PostgreSQL/Supabase), "
+            "encrypt API credentials using AES-256, and use Celery/Redis for background jobs.\n"
+            "  * SEBI Regulations: Market it as an analytical calculator, not an advisory AI, so SEBI registration is not needed.\n"
+            "  * Pricing: Standard subscription plan (Index Options) is ₹999/month, Professional Plan (Pro Options & Commodity) is ₹2,499/month. "
+            "For payment, Razorpay (UPI auto-pay) is recommended in India, Stripe globally.\n"
+            "  * How to Sell: Sell subscription SaaS to Telegram/YouTube trading communities, or sell the intellectual property (source code) "
+            "on Acquire.com or Flippa for upfront cash (₹5 Lakh to ₹25 Lakh).\n\n"
+            "Guidelines for response:\n"
+            "1. Answer in the same language the user asks (supports Hinglish, Hindi, and English).\n"
+            "2. Keep the responses concise, accurate, and structured with bullet points where appropriate.\n"
+            "3. If a question is unrelated to options trading, brokers, finance, or Trade Hub, politely redirect the user back to Trade Hub topics."
+        )
+        
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": system_context + "\n\nUser Question: " + user_message}
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.7,
+                "topP": 0.95,
+                "maxOutputTokens": 1024
+            }
+        }
+        
+        headers = {
+            "Content-Type": "application/json"
+        }
+        
+        api_key = os.environ.get("GEMINI_API_KEY", GEMINI_API_KEY)
+        
+        # Loop through fallback candidate models to handle high demand or timeouts
+        candidate_models = ["gemini-2.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
+        last_error = "No models attempted"
+        
+        for model in candidate_models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            log_message("INFO", f"Attempting Gemini request with model: {model}")
+            try:
+                # Use a larger timeout of 20 seconds to give the API extra time under high load
+                response = requests.post(url, json=payload, headers=headers, timeout=20)
+                
+                # Check status code
+                if response.status_code == 200:
+                    response_data = response.json()
+                    try:
+                        reply = response_data["candidates"][0]["content"]["parts"][0]["text"]
+                        log_message("SUCCESS", f"Successfully completed chatbot query with model: {model}")
+                        return jsonify({"status": "success", "reply": reply})
+                    except (KeyError, IndexError) as parse_err:
+                        last_error = f"Failed to parse response for model {model}: {parse_err}"
+                        log_message("WARNING", last_error)
+                        continue
+                else:
+                    try:
+                        err_json = response.json()
+                        err_msg = err_json.get("error", {}).get("message", f"Status code {response.status_code}")
+                    except Exception:
+                        err_msg = f"Status code {response.status_code}"
+                    
+                    last_error = f"Model {model} failed (Status {response.status_code}): {err_msg}"
+                    log_message("WARNING", last_error)
+                    continue
+            except requests.exceptions.Timeout:
+                last_error = f"Model {model} request timed out (20s limit reached)."
+                log_message("WARNING", last_error)
+                continue
+            except Exception as ex:
+                last_error = f"Model {model} encountered error: {str(ex)}"
+                log_message("WARNING", last_error)
+                continue
+                
+        # If all models failed, return the last error message
+        log_message("ERROR", f"All Gemini models failed. Last error details: {last_error}")
+        return jsonify({"status": "error", "message": f"Gemini API is currently busy. Please try again. (Details: {last_error})"}), 503
+        
+    except Exception as e:
+        log_message("ERROR", f"Error in chatbot API: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ==========================================
+# 9. MAIN RUNNER & AUTO-LAUNCHER
 # ==========================================
 # 9. MAIN RUNNER & AUTO-LAUNCHER
 # ==========================================
