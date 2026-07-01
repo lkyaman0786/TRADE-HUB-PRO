@@ -194,11 +194,31 @@ class ScripMasterLookup:
             mcx_expiries_set = set()
             nfo_symbols_set = set()
             mcx_symbols_set = set()
+            
+            self.token_index = {}
+            self.symbol_index = {}
+            
             for x in data:
                 exch_seg = x.get('exch_seg')
                 name = x.get('name', '').upper()
                 symbol = x.get('symbol', '').upper()
                 expiry = x.get('expiry', '').upper()
+                token = x.get('token')
+                
+                lotsize_val = 1
+                try:
+                    lotsize_val = int(x.get('lotsize', 1) or 1)
+                except Exception:
+                    pass
+                    
+                contract_info = {
+                    'token': token,
+                    'symbol': symbol,
+                    'name': name,
+                    'lotsize': lotsize_val,
+                    'exch_seg': exch_seg,
+                    'expiry': expiry,
+                }
                 
                 if exch_seg in ('NFO', 'MCX'):
                     if symbol.endswith(('CE', 'PE')):
@@ -207,11 +227,13 @@ class ScripMasterLookup:
                         except Exception:
                             continue
                         opt_type = symbol[-2:]
+                        contract_info['strike'] = strike
+                        contract_info['opt_type'] = opt_type
                         
                         self.index[(name, expiry, strike, opt_type)] = {
-                            'token': x['token'],
-                            'symbol': x['symbol'],
-                            'lotsize': int(x['lotsize']),
+                            'token': token,
+                            'symbol': symbol,
+                            'lotsize': lotsize_val,
                             'exch_seg': exch_seg
                         }
                         if expiry:
@@ -224,20 +246,29 @@ class ScripMasterLookup:
                                 if name in ('GOLD', 'SILVER', 'CRUDEOIL', 'NATURALGAS', 'GOLDM', 'SILVERM', 'CRUDEOILM', 'NATGASMINI'):
                                     mcx_expiries_set.add(expiry)
                     elif symbol.endswith('FUT'):
+                        contract_info['opt_type'] = 'FUT'
                         self.index[(name, expiry, 'FUT')] = {
-                            'token': x['token'],
-                            'symbol': x['symbol'],
-                            'lotsize': int(x['lotsize']),
+                            'token': token,
+                            'symbol': symbol,
+                            'lotsize': lotsize_val,
                             'exch_seg': exch_seg
                         }
                 elif exch_seg == 'NSE':
                     if symbol == f"{name}-EQ" or symbol == name:
+                        contract_info['opt_type'] = 'STOCK'
                         self.index[(name, 'STOCK')] = {
-                            'token': x['token'],
-                            'symbol': x['symbol'],
-                            'lotsize': int(x['lotsize']),
+                            'token': token,
+                            'symbol': symbol,
+                            'lotsize': lotsize_val,
                             'exch_seg': exch_seg
                         }
+                        
+                if token:
+                    if exch_seg:
+                        self.token_index[(str(exch_seg).upper(), str(token))] = contract_info
+                    self.token_index[str(token)] = contract_info
+                if symbol:
+                    self.symbol_index[str(symbol).upper()] = contract_info
                         
             # Sort NFO expiries chronologically
             parsed_nfo_dates = []
@@ -293,6 +324,53 @@ class ScripMasterLookup:
             return None
         opt_type = str(opt_type).strip().upper()
         return self.index.get((name, expiry, strike, opt_type))
+
+    def find_contract_by_position(self, pos, broker_name):
+        # 1. Try by token + exchange (for Angel One)
+        if broker_name == "ANGEL_ONE":
+            token = pos.get("symboltoken")
+            exchange = pos.get("exchange")
+            if token and exchange:
+                exch_upper = str(exchange).upper()
+                # Check exact match
+                key = (exch_upper, str(token))
+                if key in self.token_index:
+                    return self.token_index[key]
+                # Check MCX/NCO mapping fallback
+                if exch_upper in ("MCX", "NCO"):
+                    for alt_exch in ("MCX", "NCO"):
+                        alt_key = (alt_exch, str(token))
+                        if alt_key in self.token_index:
+                            return self.token_index[alt_key]
+
+        # 2. Try by tradingsymbol / symbol
+        symbol = pos.get("tradingsymbol") or pos.get("symbol")
+        if symbol:
+            symbol_upper = str(symbol).upper()
+            if ":" in symbol_upper:
+                symbol_upper = symbol_upper.split(":")[1]
+            if symbol_upper in self.symbol_index:
+                return self.symbol_index[symbol_upper]
+                
+        # 3. Last fallback: search token index
+        token = pos.get("symboltoken") or pos.get("instrument_token") or pos.get("token")
+        exchange = pos.get("exchange") or pos.get("exch_seg")
+        if token:
+            if exchange:
+                exch_upper = str(exchange).upper()
+                key = (exch_upper, str(token))
+                if key in self.token_index:
+                    return self.token_index[key]
+                if exch_upper in ("MCX", "NCO"):
+                    for alt_exch in ("MCX", "NCO"):
+                        alt_key = (alt_exch, str(token))
+                        if alt_key in self.token_index:
+                            return self.token_index[alt_key]
+            # Global fallback
+            if str(token) in self.token_index:
+                return self.token_index[str(token)]
+            
+        return None
 
     def lookup_underlying(self, name, expiry=None):
         if not name:
@@ -2082,6 +2160,8 @@ def load_strategies_from_disk():
                     strat["avg_entry_diff"] = None
                 if "required_margin" not in strat:
                     strat["required_margin"] = None
+                if "pnl" not in strat:
+                    strat["pnl"] = 0.0
             log_message("SUCCESS", f"Loaded {len(active_strategies)} strategies from '{STRATEGIES_FILE}'")
         except Exception as e:
             log_message("ERROR", f"Failed to load '{STRATEGIES_FILE}': {e}. Starting fresh.")
@@ -2124,6 +2204,7 @@ def seed_sample_strategies():
             "required_margin": None,
             "position": 0.0,
             "avg_entry_diff": None,
+            "pnl": 0.0,
             "status": "Strategy active.",
             "legs": [
                 {
@@ -2177,6 +2258,7 @@ def seed_sample_strategies():
             "required_margin": None,
             "position": 0.0,
             "avg_entry_diff": None,
+            "pnl": 0.0,
             "status": "Strategy active.",
             "legs": [
                 {
@@ -2433,6 +2515,26 @@ def run_trading_engine_thread():
                     except Exception as e:
                         log_message("WARNING", f"Error calculating margin: {e}")
                         strat["required_margin"] = None
+                        
+                    # Calculate live P&L for the strategy position
+                    pnl = 0.0
+                    position = strat.get("position", 0.0) or 0.0
+                    avg_entry_diff = strat.get("avg_entry_diff")
+                    if position != 0.0 and avg_entry_diff is not None and legs:
+                        current_val = 0.0
+                        for leg in legs:
+                            sign = 1.0 if leg.get("action") == "BUY" else -1.0
+                            lot = float(leg.get("lot", 1.0) or 1.0)
+                            ltp = float(leg.get("ltp") or 0.0)
+                            current_val += sign * lot * ltp
+                        
+                        base_lotsize = float(legs[0].get("lotsize", 1.0) or 1.0)
+                        if base_lotsize <= 0:
+                            base_lotsize = 1.0
+                        
+                        pnl = (current_val - avg_entry_diff) * position * base_lotsize
+                        pnl = round(pnl, 2)
+                    strat["pnl"] = pnl
                     
                     # 5. Check order triggers
                     if not engine_running:
@@ -3003,6 +3105,7 @@ def add_strategy():
             "required_margin": None,
             "position": 0.0,
             "avg_entry_diff": None,
+            "pnl": 0.0,
             "status": "Strategy active.",
             "legs": legs
         }
@@ -3221,10 +3324,6 @@ def detect_strategy_position():
             return jsonify({"status": "error", "message": "Strategy ID not found"}), 404
             
         strat = active_strategies[h_row]
-        legs = strat.get("legs", [])
-        if not legs:
-            return jsonify({"status": "error", "message": "Strategy has no legs"}), 400
-            
         if not unified_broker.connected:
             return jsonify({"status": "error", "message": "Broker not connected"}), 400
             
@@ -3233,86 +3332,125 @@ def detect_strategy_position():
             if not broker_positions:
                 return jsonify({"status": "success", "position": 0.0, "avg_entry_diff": None, "message": "No active positions found in broker account."})
                 
-            leg_multipliers = []
-            for leg in legs:
-                token = leg.get("token")
-                if not token:
-                    return jsonify({"status": "error", "message": "All legs must be configured to detect position."}), 400
-                    
-                exch = leg.get("exch_seg", "NFO")
-                lotsize = float(leg.get("lotsize", 1) or 1)
-                leg_action = leg.get("action", "BUY")
-                
-                matched_p = None
+            matched_positions = []
+            for p in broker_positions:
+                qty = 0.0
+                avg_price = 0.0
                 if unified_broker.broker == "ANGEL_ONE":
-                    for p in broker_positions:
-                        if p.get("symboltoken") == token:
-                            matched_p = p
-                            break
+                    qty = safe_float(p.get("netqty"))
+                    avg_price = safe_float(p.get("netprice") or p.get("avgprice"))
                 elif unified_broker.broker == "ZERODHA":
-                    mapped = unified_broker._get_zerodha_instruments({exch: [token]})
-                    z_sym = mapped.get(token)
-                    if z_sym and ":" in z_sym:
-                        z_sym = z_sym.split(":")[1]
-                    for p in broker_positions:
-                        if p.get("tradingsymbol") == z_sym:
-                            matched_p = p
-                            break
+                    qty = safe_float(p.get("quantity"))
+                    avg_price = safe_float(p.get("average_price"))
                 elif unified_broker.broker == "FYERS":
-                    mapped = unified_broker._get_fyers_symbols({exch: [token]})
-                    f_sym = mapped.get(token)
-                    for p in broker_positions:
-                        if p.get("symbol") == f_sym:
-                            matched_p = p
-                            break
+                    qty = safe_float(p.get("netQty"))
+                    avg_price = safe_float(p.get("avgPrice"))
+                    
+                if abs(qty) < 0.01:
+                    continue
+                    
+                contract = lookup_engine.find_contract_by_position(p, unified_broker.broker)
+                if contract:
+                    c_name = contract.get("name", "").upper()
+                    c_expiry = contract.get("expiry", "")
+                    c_opt_type = contract.get("opt_type", "STOCK")
+                    
+                    # Match symbol (underlying name, e.g. NIFTY, DLF)
+                    if c_name != strat.get("symbol", "").upper():
+                        continue
+                        
+                    # Match expiry (for options/futures)
+                    if c_opt_type != "STOCK":
+                        if normalize_expiry(c_expiry) != normalize_expiry(strat.get("expiry")):
+                            continue
                             
-                if matched_p:
-                    qty = 0.0
-                    avg_price = 0.0
-                    if unified_broker.broker == "ANGEL_ONE":
-                        qty = safe_float(matched_p.get("netqty"))
-                        avg_price = safe_float(matched_p.get("netprice") or matched_p.get("avgprice"))
-                    elif unified_broker.broker == "ZERODHA":
-                        qty = safe_float(matched_p.get("quantity"))
-                        avg_price = safe_float(matched_p.get("average_price"))
-                    elif unified_broker.broker == "FYERS":
-                        qty = safe_float(matched_p.get("netQty"))
-                        avg_price = safe_float(matched_p.get("avgPrice"))
-                        
-                    leg_lot_weight = float(leg.get("lot", 1.0) or 1.0)
-                    leg_lots = qty / (lotsize * leg_lot_weight)
-                    if leg_action == "SELL":
-                        leg_lots = -leg_lots
-                        
-                    leg_multipliers.append((leg_lots, avg_price))
-                else:
-                    leg_multipliers.append((0.0, 0.0))
+                    matched_positions.append({
+                        "contract": contract,
+                        "qty": qty,
+                        "avg_price": avg_price
+                    })
                     
-            lots_list = [item[0] for item in leg_multipliers]
+            if not matched_positions:
+                return jsonify({
+                    "status": "success",
+                    "position": 0.0,
+                    "avg_entry_diff": None,
+                    "message": f"No active broker positions found for {strat.get('symbol')} ({strat.get('expiry')})."
+                })
+                
+            # Rebuild strategy legs
+            new_legs = []
+            lots_list = []
             
-            if any(abs(l) < 0.01 for l in lots_list):
-                detected_pos = 0.0
-                detected_avg = None
-            else:
-                signs = [l > 0 for l in lots_list]
-                if len(set(signs)) > 1:
-                    return jsonify({"status": "error", "message": "Leg positions are inconsistent (some are long and some are short relative to strategy structure)."}), 400
+            for item in matched_positions:
+                contract = item["contract"]
+                qty = item["qty"]
+                avg_price = item["avg_price"]
+                lotsize = float(contract.get("lotsize", 1.0) or 1.0)
+                if lotsize <= 0:
+                    lotsize = 1.0
+                
+                lots = abs(qty) / lotsize
+                lots_list.append(lots)
+                
+                # Determine leg action:
+                # If quantity > 0, it's BUY. If quantity < 0, it's SELL.
+                leg_action = "BUY" if qty > 0 else "SELL"
+                
+                # Determine strike display (none for STOCK/FUT)
+                strike_val = contract.get("strike")
+                if contract.get("opt_type") in ("CE", "PE"):
+                    try:
+                        strike_val = float(strike_val) if "." in str(strike_val) else int(strike_val)
+                    except Exception:
+                        pass
+                else:
+                    strike_val = ""
                     
-                min_mag = min(abs(l) for l in lots_list)
-                detected_pos = min_mag if lots_list[0] > 0 else -min_mag
+                new_legs.append({
+                    "strike": strike_val,
+                    "opt_type": contract.get("opt_type", "STOCK"),
+                    "expiry": contract.get("expiry") or strat.get("expiry"),
+                    "action": leg_action,
+                    "lot": lots,  # Temporary absolute lot value, will scale below
+                    "token": contract.get("token"),
+                    "symbol": contract.get("symbol"),
+                    "lotsize": lotsize,
+                    "exch_seg": contract.get("exch_seg") or "NFO",
+                    "status": "Live update active.",
+                    "entry_price": avg_price
+                })
                 
-                total_diff = 0.0
-                for leg, (leg_lots, avg_price) in zip(legs, leg_multipliers):
-                    sign = 1.0 if leg.get("action") == "BUY" else -1.0
-                    total_diff += sign * leg.get("lot", 1.0) * avg_price
-                detected_avg = round(total_diff, 2)
-                detected_pos = round(detected_pos, 2)
+            # Find the base scaling factor (min lots)
+            min_lots = min(lots_list)
+            if min_lots <= 0.001:
+                min_lots = 1.0
                 
+            # Rescale each leg relative to min_lots
+            for leg in new_legs:
+                raw_lots = leg["lot"]
+                leg["lot"] = round(raw_lots / min_lots, 2)
+                
+            # Calculate avg_entry_diff
+            total_diff = 0.0
+            for leg in new_legs:
+                sign = 1.0 if leg["action"] == "BUY" else -1.0
+                total_diff += sign * leg["lot"] * leg["entry_price"]
+                
+            detected_pos = round(min_lots, 2)
+            detected_avg = round(total_diff, 2)
+            
+            # Save rebuilt legs to the strategy
+            strat["legs"] = new_legs
+            strat["position"] = detected_pos
+            strat["avg_entry_diff"] = detected_avg
+            save_strategies_to_disk()
+            
             return jsonify({
                 "status": "success",
                 "position": detected_pos,
                 "avg_entry_diff": detected_avg,
-                "message": f"Detected Position: {detected_pos} @ {detected_avg}" if detected_pos != 0.0 else "Detected Position: FLAT"
+                "message": f"Successfully synced {len(new_legs)} legs from broker. Position: {detected_pos} @ {detected_avg}"
             })
             
         except Exception as e:
@@ -3342,6 +3480,173 @@ def update_strategy_position_api():
         log_message("SUCCESS", f"Strategy {strat['symbol']} position manually set to {position} @ {avg_entry_diff}")
         
     return jsonify({"status": "success"})
+
+@app.route('/api/strategy/import-all', methods=['POST'])
+def import_all_strategies_from_broker():
+    global active_strategies
+    if not unified_broker.connected:
+        return jsonify({"status": "error", "message": "Broker not connected"}), 400
+        
+    try:
+        with state_lock:
+            load_strategies_from_disk()
+        broker_positions = unified_broker.get_positions()
+        if not broker_positions:
+            return jsonify({"status": "success", "imported_count": 0, "message": "No active positions found in broker account."})
+            
+        # Group active positions by underlying name
+        groups = {}
+        for p in broker_positions:
+            qty = 0.0
+            avg_price = 0.0
+            if unified_broker.broker == "ANGEL_ONE":
+                qty = safe_float(p.get("netqty"))
+                avg_price = safe_float(p.get("netprice") or p.get("avgprice"))
+            elif unified_broker.broker == "ZERODHA":
+                qty = safe_float(p.get("quantity"))
+                avg_price = safe_float(p.get("average_price"))
+            elif unified_broker.broker == "FYERS":
+                qty = safe_float(p.get("netQty"))
+                avg_price = safe_float(p.get("avgPrice"))
+                
+            if abs(qty) < 0.01:
+                continue
+                
+            contract = lookup_engine.find_contract_by_position(p, unified_broker.broker)
+            if contract:
+                underlying = contract.get("name", "").upper()
+                
+                # Group by underlying name (e.g. "SILVERM", "CRUDEOIL", "WIPRO")
+                group_key = underlying
+                if group_key not in groups:
+                    groups[group_key] = []
+                    
+                groups[group_key].append({
+                    "contract": contract,
+                    "qty": qty,
+                    "avg_price": avg_price
+                })
+                
+        if not groups:
+            return jsonify({"status": "success", "imported_count": 0, "message": "No active NFO/MCX/NSE positions could be matched."})
+            
+        imported_count = 0
+        with state_lock:
+            for group_key, items in groups.items():
+                underlying = group_key
+                
+                # Determine display expiry
+                display_expiry = ""
+                for it in items:
+                    if it["contract"].get("expiry"):
+                        display_expiry = it["contract"].get("expiry")
+                        break
+                        
+                # Rebuild legs
+                new_legs = []
+                lots_list = []
+                for item in items:
+                    contract = item["contract"]
+                    qty = item["qty"]
+                    avg_price = item["avg_price"]
+                    lotsize = float(contract.get("lotsize", 1.0) or 1.0)
+                    if lotsize <= 0:
+                        lotsize = 1.0
+                        
+                    lots = abs(qty) / lotsize
+                    lots_list.append(lots)
+                    
+                    leg_action = "BUY" if qty > 0 else "SELL"
+                    
+                    strike_val = contract.get("strike")
+                    if contract.get("opt_type") in ("CE", "PE"):
+                        try:
+                            strike_val = float(strike_val) if "." in str(strike_val) else int(strike_val)
+                        except Exception:
+                            pass
+                    else:
+                        strike_val = ""
+                        
+                    new_legs.append({
+                        "strike": strike_val,
+                        "opt_type": contract.get("opt_type", "STOCK"),
+                        "expiry": contract.get("expiry") or display_expiry,
+                        "action": leg_action,
+                        "lot": lots,  # Temporary
+                        "token": contract.get("token"),
+                        "symbol": contract.get("symbol"),
+                        "lotsize": lotsize,
+                        "exch_seg": contract.get("exch_seg") or "NFO",
+                        "status": "Live update active.",
+                        "entry_price": avg_price
+                    })
+                    
+                min_lots = min(lots_list)
+                if min_lots <= 0.001:
+                    min_lots = 1.0
+                    
+                for leg in new_legs:
+                    raw_lots = leg["lot"]
+                    leg["lot"] = round(raw_lots / min_lots, 2)
+                    
+                total_diff = 0.0
+                for leg in new_legs:
+                    sign = 1.0 if leg["action"] == "BUY" else -1.0
+                    total_diff += sign * leg["lot"] * leg["entry_price"]
+                    
+                detected_pos = round(min_lots, 2)
+                detected_avg = round(total_diff, 2)
+                
+                # Check for existing strategy match (matching only by symbol/underlying)
+                matched_strat_id = None
+                for strat_id, strat in active_strategies.items():
+                    if strat.get("symbol", "").upper() == underlying:
+                        matched_strat_id = strat_id
+                        break
+                        
+                if matched_strat_id:
+                    # Update existing strategy
+                    strat = active_strategies[matched_strat_id]
+                    strat["legs"] = new_legs
+                    strat["position"] = detected_pos
+                    strat["avg_entry_diff"] = detected_avg
+                    strat["expiry"] = display_expiry or strat.get("expiry")
+                    strat["status"] = "Imported/Synced from broker."
+                else:
+                    # Create new strategy
+                    new_id = str(max([int(k) for k in active_strategies.keys()] + [1000]) + 1)
+                    active_strategies[new_id] = {
+                        "symbol": underlying,
+                        "expiry": display_expiry,
+                        "strategy_type": "SPREAD",
+                        "strategy_lot": 1.0,
+                        "target_buy": None,
+                        "target_sell": None,
+                        "trade_action": "",
+                        "execute_trigger": "",
+                        "buy_diff": None,
+                        "sell_diff": None,
+                        "est_cost": None,
+                        "cost_per_share": None,
+                        "required_margin": None,
+                        "position": detected_pos,
+                        "avg_entry_diff": detected_avg,
+                        "pnl": 0.0,
+                        "status": "Imported from broker.",
+                        "legs": new_legs
+                    }
+                imported_count += 1
+                
+            save_strategies_to_disk()
+            
+        return jsonify({
+            "status": "success",
+            "imported_count": imported_count,
+            "message": f"Successfully imported/synced {imported_count} strategies from broker."
+        })
+        
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Import failed: {str(e)}"}), 500
 
 @app.route('/api/logs/clear', methods=['POST'])
 def clear_logs():

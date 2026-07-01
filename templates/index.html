@@ -764,7 +764,13 @@
 
                     <!-- Welcome Block / Overview Table -->
                     <div class="glass-panel p-6 rounded-lg space-y-4">
-                        <h3 class="font-display font-bold text-sm text-on-surface border-b border-outline-variant/20 pb-2">Active Strategy Matrix</h3>
+                        <div class="flex justify-between items-center border-b border-outline-variant/20 pb-2 mb-2">
+                            <h3 class="font-display font-bold text-sm text-on-surface">Active Strategy Matrix</h3>
+                            <button onclick="importAllPositionsFromBroker(this)" class="px-3 py-1.5 bg-secondary text-white font-display font-bold text-[10px] rounded-lg shadow shadow-secondary/10 hover:bg-secondary/90 flex items-center gap-1.5 transition-all" title="Import/sync all open broker positions as strategy spreads">
+                                <span class="material-symbols-outlined text-[12px] md:text-sm">sync</span>
+                                SYNC POSITIONS FROM BROKER
+                            </button>
+                        </div>
                         <div class="overflow-x-auto w-full">
                             <table class="w-full text-left text-xs border-collapse">
                                 <thead>
@@ -807,10 +813,16 @@
                         </div>
                         
                         <!-- Add Strategy trigger -->
-                        <button onclick="openAddModal()" class="px-5 py-2 bg-primary text-white font-display font-bold text-[10px] rounded-lg shadow-lg shadow-primary/10 hover:bg-primary/90 flex items-center gap-1.5 transition-all">
-                            <span class="material-symbols-outlined text-sm">add_circle</span>
-                            ADD STRATEGY
-                        </button>
+                        <div class="flex gap-2">
+                            <button onclick="importAllPositionsFromBroker(this)" class="px-5 py-2 bg-secondary text-white font-display font-bold text-[10px] rounded-lg shadow-lg shadow-secondary/10 hover:bg-secondary/90 flex items-center gap-1.5 transition-all" title="Import/sync all open broker positions as strategy spreads">
+                                <span class="material-symbols-outlined text-sm">download</span>
+                                IMPORT FROM BROKER
+                            </button>
+                            <button onclick="openAddModal()" class="px-5 py-2 bg-primary text-white font-display font-bold text-[10px] rounded-lg shadow-lg shadow-primary/10 hover:bg-primary/90 flex items-center gap-1.5 transition-all">
+                                <span class="material-symbols-outlined text-sm">add_circle</span>
+                                ADD STRATEGY
+                            </button>
+                        </div>
                     </div>
 
                     <!-- Dynamic strategies list container -->
@@ -1790,7 +1802,16 @@
             if (stratKeys.length === 0) {
                 tbody.innerHTML = `
                     <tr>
-                        <td colspan="7" class="py-6 text-center text-on-surface-variant">No strategies configured. Please go to the "Strategies" tab to create one.</td>
+                        <td colspan="7" class="py-12 text-center">
+                            <div class="flex flex-col items-center justify-center space-y-3">
+                                <span class="material-symbols-outlined text-3xl text-on-surface-variant/40 animate-pulse">download_for_offline</span>
+                                <p class="text-on-surface-variant font-medium text-xs">No active strategies configured on screen.</p>
+                                <button onclick="importAllPositionsFromBroker()" class="px-5 py-2.5 bg-secondary text-white font-display font-bold text-[11px] rounded-lg shadow-lg shadow-secondary/15 hover:bg-secondary/90 transition-all flex items-center gap-2 mx-auto">
+                                    <span class="material-symbols-outlined text-sm">download</span>
+                                    IMPORT & AUTO-BUILD FROM BROKER
+                                </button>
+                            </div>
+                        </td>
                     </tr>
                 `;
                 return;
@@ -1971,6 +1992,11 @@
                             <span onclick="openEditPositionModal('${h_row}')" class="bg-secondary/10 text-secondary border border-secondary/35 rounded px-2.5 py-1 shadow-sm cursor-pointer hover:scale-103 transition-transform" title="Click to edit or detect position from broker">
                                 POS: <span id="badge-posval-${h_row}" class="font-extrabold text-[12px]">
                                     ${strat.position !== undefined && strat.position !== 0.0 ? (strat.position > 0 ? '+' : '') + strat.position + (strat.avg_entry_diff !== null && strat.avg_entry_diff !== undefined ? ' @ ' + strat.avg_entry_diff : '') : 'FLAT'}
+                                </span>
+                            </span>
+                            <span id="badge-pnl-container-${h_row}" class="rounded px-2.5 py-1 shadow-sm border transition-colors ${strat.pnl !== undefined && strat.pnl !== null ? (strat.pnl > 0 ? 'bg-secondary/10 text-secondary border-secondary/35' : (strat.pnl < 0 ? 'bg-error/10 text-error border-error/35' : 'bg-outline-variant/20 border-outline-variant/30 text-on-surface-variant')) : 'bg-outline-variant/20 border-outline-variant/30 text-on-surface-variant'}" title="Live Strategy P&L">
+                                P&L: <span id="badge-pnlval-${h_row}" class="font-extrabold text-[12px]">
+                                    ${formatPnl(strat.pnl)}
                                 </span>
                             </span>
                             <span class="bg-outline-variant/20 border border-outline-variant/30 rounded px-2.5 py-1 shadow-sm">
@@ -2165,6 +2191,21 @@
                 ? (strat.position > 0 ? '+' : '') + strat.position + (strat.avg_entry_diff !== null && strat.avg_entry_diff !== undefined ? ' @ ' + strat.avg_entry_diff : '') 
                 : 'FLAT';
             updateText(`badge-posval-${h_row}`, posVal);
+            
+            // Update live P&L badge
+            const pnlVal = parseFloat(strat.pnl || 0.0);
+            updateText(`badge-pnlval-${h_row}`, formatPnl(strat.pnl));
+            const pnlContainer = document.getElementById(`badge-pnl-container-${h_row}`);
+            if (pnlContainer) {
+                if (pnlVal > 0) {
+                    pnlContainer.className = "bg-secondary/10 text-secondary border border-secondary/35 rounded px-2.5 py-1 shadow-sm transition-colors";
+                } else if (pnlVal < 0) {
+                    pnlContainer.className = "bg-error/10 text-error border border-error/35 rounded px-2.5 py-1 shadow-sm transition-colors";
+                } else {
+                    pnlContainer.className = "bg-outline-variant/20 border border-outline-variant/30 text-on-surface-variant rounded px-2.5 py-1 shadow-sm transition-colors";
+                }
+            }
+            
             updateText(`badge-marginval-${h_row}`, strat.required_margin !== null && strat.required_margin !== undefined ? formatRupee(strat.required_margin) : '₹--');
             
             updateInputVal(`ctrl-lot-${h_row}`, strat.strategy_lot, `${h_row}-strategy_lot`);
@@ -2974,6 +3015,40 @@
 
         function closePosModal() {
             document.getElementById('pos-modal').classList.add('hidden');
+        }
+
+        async function importAllPositionsFromBroker(btn = null) {
+            if (!confirm("Are you sure you want to import/sync all active positions from the broker? This will automatically create or update strategies on your screen.")) {
+                return;
+            }
+            const targetBtn = btn || document.querySelector('button[onclick*="importAllPositionsFromBroker"]');
+            let origHTML = '';
+            if (targetBtn) {
+                origHTML = targetBtn.innerHTML;
+                targetBtn.disabled = true;
+                targetBtn.innerHTML = '<span class="material-symbols-outlined text-sm animate-spin">sync</span> IMPORTING...';
+            }
+            try {
+                const res = await fetch('/api/strategy/import-all', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    alert(data.message || 'Import successful!');
+                    fetchAppState();
+                } else {
+                    alert('Import failed: ' + (data.message || 'Unknown error'));
+                }
+            } catch (err) {
+                console.error(err);
+                alert('Import failed: Network error.');
+            } finally {
+                if (targetBtn) {
+                    targetBtn.disabled = false;
+                    targetBtn.innerHTML = origHTML;
+                }
+            }
         }
 
         async function detectPositionFromBroker() {
