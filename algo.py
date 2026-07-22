@@ -2873,6 +2873,31 @@ def verify_user(username, password):
 app = Flask(__name__, template_folder='templates')
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "trade_hub_pro_secret_key_998877")
 
+_engine_initialized = False
+
+def init_app_engine():
+    global lookup_engine, unified_broker, _engine_initialized
+    if _engine_initialized:
+        return
+    _engine_initialized = True
+    print("\n" + "="*70)
+    print("  COMMERCIAL MULTI-BROKER OPTIONS TRADE HUB ENGINE RUNNING (ONLINE PROD DASHBOARD)")
+    print("="*70 + "\n")
+    log_message("INFO", "Initializing Trade Hub Pro Engine components...")
+    init_db()
+    unified_broker = UnifiedBrokerClient()
+    lookup_engine = ScripMasterLookup("OpenAPIScripMaster.json")
+    load_strategies_from_disk()
+    if not active_strategies:
+        seed_sample_strategies()
+    trading_thread = threading.Thread(target=run_trading_engine_thread, daemon=True)
+    trading_thread.start()
+    log_message("SUCCESS", "Trade Hub Engine background loop started.")
+
+# Auto-initialize when loaded by Gunicorn or Flask
+init_app_engine()
+
+
 @app.before_request
 def check_authentication():
     public_routes = ['login_view', 'static']
@@ -4311,43 +4336,20 @@ def launch_web_browser(port):
     webbrowser.open(f"http://127.0.0.1:{port}")
 
 def main():
-    global lookup_engine, unified_broker
-    
-    print("\n" + "="*70)
-    print("  COMMERCIAL MULTI-BROKER OPTIONS TRADE HUB ENGINE RUNNING (PREMIUM DASHBOARD)")
-    print("="*70 + "\n")
-    
-    # Initialize SQLite Database
-    init_db()
-    
-    # Initialize unified broker client
-    unified_broker = UnifiedBrokerClient()
-    
-    # 1. Fast Scrip Master lookup engine initialization
-    lookup_engine = ScripMasterLookup("OpenAPIScripMaster.json")
-    
-    # 2. Local persistence - Load saved strategies
-    load_strategies_from_disk()
-    
-    # 3. Dynamic seed logic if database is clean
-    if not active_strategies:
-        seed_sample_strategies()
-        
-    # 4. Initialize trading loop background thread
-    trading_thread = threading.Thread(target=run_trading_engine_thread, daemon=True)
-    trading_thread.start()
+    init_app_engine()
     
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", 5000))
     is_cloud = bool(os.environ.get("PORT") or os.environ.get("RAILWAY_STATIC_URL") or os.environ.get("RENDER"))
 
-    # 5. Start browser auto-launcher (only when running locally)
+    # Start browser auto-launcher (only when running locally)
     if not is_cloud:
         launcher_thread = threading.Thread(target=launch_web_browser, args=(port,), daemon=True)
         launcher_thread.start()
     
-    # 6. Initialize Flask server
+    # Initialize Flask server
     log_message("INFO", f"Starting Flask application Web Server on {host}:{port}...")
+
     try:
         app.run(host=host, port=port, debug=False, use_reloader=False)
     except OSError as e:

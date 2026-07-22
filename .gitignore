@@ -17,6 +17,8 @@ logs/
 __pycache__/
 *.pyc
 
-# Local binary wheels
+# Local binary wheels & tools
 *.whl
+cloudflared.exe
+
 
