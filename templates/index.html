@@ -8,6 +8,9 @@
     <!-- Tailwind CSS CDN & Extensions -->
     <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
     
+    <!-- TradingView Lightweight Charts for premium candlestick charting -->
+    <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+    
     <!-- Google Fonts & Material Symbols -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -664,7 +667,13 @@
                     <span class="material-symbols-outlined text-lg">settings</span>
                     <span class="font-display font-semibold text-[11px] uppercase tracking-wider">Settings</span>
                 </a>
+                <!-- Sign Out Link -->
+                <a id="nav-logout" href="/logout" class="flex items-center gap-3 px-3 py-3 rounded text-rose-400 hover:bg-rose-500/10 transition-all">
+                    <span class="material-symbols-outlined text-lg">logout</span>
+                    <span class="font-display font-semibold text-[11px] uppercase tracking-wider">Sign Out</span>
+                </a>
             </nav>
+
 
             <!-- Sidebar Bottom Profile Panel -->
             <div class="p-4 border-t border-outline-variant/10 bg-transparent shrink-0">
@@ -1156,6 +1165,94 @@
                         Close Profile
                     </button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal D: Strategy Chart Dialog -->
+    <div id="chart-modal" class="hidden fixed inset-0 w-full h-full flex justify-center items-center p-6 bg-black/60 backdrop-blur-sm z-[999] transition-all">
+        <div class="w-full max-w-[850px] bg-surface rounded-lg border border-outline-variant/30 overflow-hidden shadow-2xl animate-chatbot-slide-in flex flex-col h-[85vh]">
+            <!-- Modal Header -->
+            <div class="px-5 py-4 border-b border-outline-variant/20 flex justify-between items-center shrink-0">
+                <div class="flex items-center gap-3">
+                    <span class="material-symbols-outlined text-primary text-xl">show_chart</span>
+                    <h3 class="font-display font-bold text-sm text-on-surface uppercase tracking-wide" id="chart-modal-title">Strategy Spread Chart</h3>
+                </div>
+                <button onclick="closeChartModal()" class="text-on-surface-variant hover:text-on-surface"><span class="material-symbols-outlined">close</span></button>
+            </div>
+            
+            <!-- Modal Body -->
+            <div class="p-5 flex-1 flex flex-col min-h-0 space-y-4">
+                <!-- Timeframe Selector & Chart controls -->
+                <div class="flex flex-wrap items-center justify-between gap-3 bg-surface-container/40 p-2.5 rounded border border-outline-variant/10 shrink-0">
+                    <div class="flex flex-wrap items-center gap-3">
+                        <div class="flex items-center gap-1.5" id="chart-timeframes">
+                            <button onclick="changeChartTimeframe('1m')" class="chart-tf-btn px-3 py-1 text-[10px] font-bold uppercase rounded transition-colors bg-primary text-white" data-tf="1m">1 Min</button>
+                            <button onclick="changeChartTimeframe('5m')" class="chart-tf-btn px-3 py-1 text-[10px] font-bold uppercase rounded transition-colors bg-surface-container hover:bg-surface-container-high text-on-surface-variant" data-tf="5m">5 Min</button>
+                            <button onclick="changeChartTimeframe('10m')" class="chart-tf-btn px-3 py-1 text-[10px] font-bold uppercase rounded transition-colors bg-surface-container hover:bg-surface-container-high text-on-surface-variant" data-tf="10m">10 Min</button>
+                            <button onclick="changeChartTimeframe('15m')" class="chart-tf-btn px-3 py-1 text-[10px] font-bold uppercase rounded transition-colors bg-surface-container hover:bg-surface-container-high text-on-surface-variant" data-tf="15m">15 Min</button>
+                            <button onclick="changeChartTimeframe('30m')" class="chart-tf-btn px-3 py-1 text-[10px] font-bold uppercase rounded transition-colors bg-surface-container hover:bg-surface-container-high text-on-surface-variant" data-tf="30m">30 Min</button>
+                            <button onclick="changeChartTimeframe('1h')" class="chart-tf-btn px-3 py-1 text-[10px] font-bold uppercase rounded transition-colors bg-surface-container hover:bg-surface-container-high text-on-surface-variant" data-tf="1h">1 Hour</button>
+                            <button onclick="changeChartTimeframe('1d')" class="chart-tf-btn px-3 py-1 text-[10px] font-bold uppercase rounded transition-colors bg-surface-container hover:bg-surface-container-high text-on-surface-variant" data-tf="1d">1 Day</button>
+                        </div>
+                        
+                        <!-- Series Selector Dropdown -->
+                        <div class="flex items-center gap-1">
+                            <span class="text-[9px] uppercase tracking-wider font-bold text-on-surface-variant/80">Series:</span>
+                            <select id="chart-series-type" onchange="changeChartSeriesType(this.value)" class="bg-surface border border-outline-variant/60 rounded px-2 py-0.5 text-[10px] font-bold outline-none focus:ring-1 focus:ring-primary text-on-surface">
+                                <option value="mid" selected>MID PRICE</option>
+                                <option value="buy">BUY SPREAD</option>
+                                <option value="sell">SELL SPREAD</option>
+                            </select>
+                        </div>
+                        
+                        <!-- Indicators Selector Dropdown -->
+                        <div class="flex items-center gap-1 ml-2">
+                            <span class="text-[9px] uppercase tracking-wider font-bold text-on-surface-variant/80">Indicators:</span>
+                            <select id="chart-indicator-type" onchange="changeChartIndicator(this.value)" class="bg-surface border border-outline-variant/60 rounded px-2 py-0.5 text-[10px] font-bold outline-none focus:ring-1 focus:ring-primary text-on-surface">
+                                <option value="none" selected>NONE</option>
+                                <option value="sma">SMA (20)</option>
+                                <option value="ema">EMA (50)</option>
+                                <option value="bb">BOLLINGER BANDS</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center gap-3">
+                        <span class="text-[10px] font-mono text-on-surface-variant/60" id="chart-stats-info">No ticks loaded</span>
+                    </div>
+                </div>
+                
+                <!-- Chart Area -->
+                <div class="flex-1 min-h-0 bg-surface-container-lowest border border-outline-variant/30 rounded p-4 relative flex flex-col">
+                    <!-- TradingView Legend Bar -->
+                    <div class="flex flex-wrap items-center justify-between gap-3 bg-surface-container/60 px-3 py-1.5 rounded-t border border-outline-variant/10 text-[10px] shrink-0 font-mono mb-2">
+                        <div class="flex flex-wrap items-center gap-3.5" id="chart-legend-values">
+                            <span class="text-on-surface-variant font-semibold">O: <strong class="text-primary font-bold text-xs" id="legend-open">--</strong></span>
+                            <span class="text-on-surface-variant font-semibold">H: <strong class="text-[#10b981] font-bold text-xs" id="legend-high">--</strong></span>
+                            <span class="text-on-surface-variant font-semibold">L: <strong class="text-[#ef5350] font-bold text-xs" id="legend-low">--</strong></span>
+                            <span class="text-on-surface-variant font-semibold">C: <strong class="text-primary font-bold text-xs" id="legend-close">--</strong></span>
+                            <span class="text-on-surface-variant font-semibold">V: <strong class="text-on-surface font-bold text-xs" id="legend-volume">--</strong></span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-on-surface-variant uppercase font-bold text-[9px]">Today's Vol:</span>
+                            <strong class="text-primary font-bold text-xs" id="chart-today-volume">--</strong>
+                        </div>
+                    </div>
+                    <div id="strategyChartCanvasContainer" class="w-full flex-1 min-h-0"></div>
+                    <!-- Loading overlay -->
+                    <div id="chart-loading" class="absolute inset-0 bg-surface/80 flex items-center justify-center hidden">
+                        <div class="flex flex-col items-center gap-2">
+                            <div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+                            <span class="text-[10px] text-on-surface-variant tracking-wider uppercase font-semibold">Loading data...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Modal Footer -->
+            <div class="px-5 py-3.5 border-t border-outline-variant/20 flex justify-end bg-surface-container/20 shrink-0">
+                <button onclick="closeChartModal()" class="px-5 py-1.5 border border-outline hover:bg-surface-container-high text-on-surface-variant font-display font-semibold text-[10px] rounded transition-all uppercase tracking-wider">Close</button>
             </div>
         </div>
     </div>
@@ -1898,6 +1995,9 @@
                         </div>
 
                         <div class="flex gap-2">
+                            <button class="px-2.5 py-1 bg-surface-container hover:bg-surface-container-high border border-outline-variant text-on-surface font-display font-bold text-[9px] rounded flex items-center gap-1" onclick="openStrategyChart('${h_row}')" title="View Spread Chart">
+                                <span class="material-symbols-outlined text-[13px]">show_chart</span> CHART
+                            </button>
                             <button class="px-2.5 py-1 bg-surface-container hover:bg-surface-container-high border border-outline-variant text-on-surface font-display font-bold text-[9px] rounded flex items-center gap-1" onclick="addLegToStrategy('${h_row}')">
                                 <span class="material-symbols-outlined text-[13px]">add</span> ADD LEG
                             </button>
@@ -3015,6 +3115,605 @@
 
         function closePosModal() {
             document.getElementById('pos-modal').classList.add('hidden');
+        }
+
+        // Strategy Spread Chart control variables
+        let chartInstance = null;
+        let candlestickSeries = null;
+        let lineSeries = null;
+        let volumeSeries = null;
+        let activeChartIndicator = 'none';
+        let smaSeriesInstance = null;
+        let emaSeriesInstance = null;
+        let bbUpperSeriesInstance = null;
+        let bbMiddleSeriesInstance = null;
+        let bbLowerSeriesInstance = null;
+        let activeChartStyle = 'candlestick';
+        let activeChartStrategyId = null;
+        let activeChartTimeframe = '1m';
+        let activeChartSeriesType = 'mid';
+        let lastFetchedChartData = [];
+        let chartRefreshTimer = null;
+        let shouldFitContent = false;
+
+        function openStrategyChart(h_row) {
+            const strat = activeStrategies[h_row];
+            if (!strat) return;
+
+            activeChartStrategyId = h_row;
+            activeChartTimeframe = '1m';
+            activeChartSeriesType = 'mid';
+            lastFetchedChartData = [];
+            shouldFitContent = true;
+
+            // Reset timeframe button active state
+            updateTimeframeButtonsActiveState('1m');
+            
+            // Reset Series Selector value
+            const seriesSelector = document.getElementById('chart-series-type');
+            if (seriesSelector) seriesSelector.value = 'mid';
+
+            // Set modal header details
+            document.getElementById('chart-modal-title').innerText = `TradingView Spread Chart: ${strat.symbol} (${strat.expiry})`;
+            document.getElementById('chart-stats-info').innerText = 'Loading ticks...';
+
+            // Show chart modal
+            document.getElementById('chart-modal').classList.remove('hidden');
+
+            // Wait a brief moment for the modal to display and compute dimensions
+            setTimeout(() => {
+                loadChartData(h_row, '1m');
+                window.addEventListener('resize', handleChartResize);
+            }, 100);
+
+            // Start polling timer to fetch new data every 5 seconds
+            if (chartRefreshTimer) clearInterval(chartRefreshTimer);
+            chartRefreshTimer = setInterval(() => {
+                loadChartData(activeChartStrategyId, activeChartTimeframe, true);
+            }, 5000);
+        }
+
+        function closeChartModal() {
+            document.getElementById('chart-modal').classList.add('hidden');
+            
+            // Stop polling
+            if (chartRefreshTimer) {
+                clearInterval(chartRefreshTimer);
+                chartRefreshTimer = null;
+            }
+            
+            // Remove resize listener
+            window.removeEventListener('resize', handleChartResize);
+            
+            // Destroy chart instance to clean up memory
+            if (chartInstance) {
+                chartInstance.remove();
+                chartInstance = null;
+                candlestickSeries = null;
+                lineSeries = null;
+                volumeSeries = null;
+                smaSeriesInstance = null;
+                emaSeriesInstance = null;
+                bbUpperSeriesInstance = null;
+                bbMiddleSeriesInstance = null;
+                bbLowerSeriesInstance = null;
+            }
+
+            // Reset legend text
+            const resetFields = ['legend-open', 'legend-high', 'legend-low', 'legend-close', 'legend-volume', 'chart-today-volume'];
+            resetFields.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.innerText = '--';
+            });
+
+            activeChartStrategyId = null;
+            lastFetchedChartData = [];
+        }
+
+        function changeChartTimeframe(tf) {
+            if (!activeChartStrategyId) return;
+            
+            activeChartTimeframe = tf;
+            shouldFitContent = true; // Auto-scale to fit new timeframe candles
+            updateTimeframeButtonsActiveState(tf);
+            loadChartData(activeChartStrategyId, tf);
+        }
+
+        function changeChartSeriesType(type) {
+            if (!activeChartStrategyId) return;
+            
+            activeChartSeriesType = type;
+            if (lastFetchedChartData && lastFetchedChartData.length > 0) {
+                renderStrategyChartCanvas(lastFetchedChartData);
+            }
+        }
+
+        function changeChartStyle(style) {
+            if (!activeChartStrategyId) return;
+            
+            activeChartStyle = style;
+            if (lastFetchedChartData && lastFetchedChartData.length > 0) {
+                renderStrategyChartCanvas(lastFetchedChartData);
+            }
+        }
+
+        function changeChartIndicator(val) {
+            activeChartIndicator = val;
+            if (lastFetchedChartData && lastFetchedChartData.length > 0) {
+                renderStrategyChartCanvas(lastFetchedChartData);
+            }
+        }
+
+        // Technical Indicator Calculators
+        function calculateSMA(data, period) {
+            let sma = [];
+            for (let i = 0; i < data.length; i++) {
+                if (i < period - 1) {
+                    sma.push({ time: data[i].time });
+                } else {
+                    let sum = 0;
+                    for (let j = 0; j < period; j++) {
+                        sum += data[i - j].close;
+                    }
+                    sma.push({ time: data[i].time, value: sum / period });
+                }
+            }
+            return sma.filter(item => item.value !== undefined);
+        }
+
+        function calculateEMA(data, period) {
+            let ema = [];
+            if (data.length === 0) return ema;
+            let k = 2 / (period + 1);
+            let emaVal = data[0].close;
+            ema.push({ time: data[0].time, value: emaVal });
+            for (let i = 1; i < data.length; i++) {
+                emaVal = data[i].close * k + emaVal * (1 - k);
+                ema.push({ time: data[i].time, value: emaVal });
+            }
+            return ema;
+        }
+
+        function calculateBollingerBands(data, period = 20, multiplier = 2) {
+            let bands = { upper: [], middle: [], lower: [] };
+            for (let i = 0; i < data.length; i++) {
+                if (i < period - 1) {
+                    continue;
+                }
+                let sum = 0;
+                for (let j = 0; j < period; j++) {
+                    sum += data[i - j].close;
+                }
+                let mean = sum / period;
+                let variance = 0;
+                for (let j = 0; j < period; j++) {
+                    variance += Math.pow(data[i - j].close - mean, 2);
+                }
+                let stdDev = Math.sqrt(variance / period);
+                bands.middle.push({ time: data[i].time, value: mean });
+                bands.upper.push({ time: data[i].time, value: mean + multiplier * stdDev });
+                bands.lower.push({ time: data[i].time, value: mean - multiplier * stdDev });
+            }
+            return bands;
+        }
+
+        function handleChartResize() {
+            const container = document.getElementById('strategyChartCanvasContainer');
+            if (chartInstance && container && container.clientWidth > 0 && container.clientHeight > 0) {
+                chartInstance.resize(container.clientWidth, container.clientHeight);
+            }
+        }
+
+        function updateTimeframeButtonsActiveState(activeTf) {
+            const buttons = document.querySelectorAll('.chart-tf-btn');
+            buttons.forEach(btn => {
+                const tf = btn.getAttribute('data-tf');
+                if (tf === activeTf) {
+                    btn.className = 'chart-tf-btn px-3 py-1 text-[10px] font-bold uppercase rounded transition-colors bg-primary text-white';
+                } else {
+                    btn.className = 'chart-tf-btn px-3 py-1 text-[10px] font-bold uppercase rounded transition-colors bg-surface-container hover:bg-surface-container-high text-on-surface-variant';
+                }
+            });
+        }
+
+        async function loadChartData(h_row, timeframe, isUpdate = false) {
+            const loadingOverlay = document.getElementById('chart-loading');
+            
+            if (!isUpdate && loadingOverlay) {
+                loadingOverlay.classList.remove('hidden');
+            }
+
+            try {
+                const response = await fetch(`/api/strategy/chart?id=${h_row}&timeframe=${timeframe}`);
+                if (!response.ok) throw new Error('API request failed');
+                
+                // Guard: If the modal was closed or switched to a different strategy, ignore in-flight updates
+                if (activeChartStrategyId !== h_row) {
+                    return;
+                }
+                
+                const resData = await response.json();
+                if (resData.status !== 'success') throw new Error(resData.message || 'Unknown server error');
+                
+                const chartDataList = resData.data || [];
+                lastFetchedChartData = chartDataList;
+                
+                // Hide loading overlay
+                if (loadingOverlay) loadingOverlay.classList.add('hidden');
+                
+                // Update stats info label
+                const statsInfo = document.getElementById('chart-stats-info');
+                if (statsInfo) {
+                    statsInfo.innerText = chartDataList.length > 0 
+                        ? `${chartDataList.length} Candle(s) Loaded` 
+                        : 'No active ticks. Configure legs to stream pricing.';
+                }
+                
+                renderStrategyChartCanvas(chartDataList);
+            } catch (err) {
+                // Guard: If the modal was closed or switched to a different strategy, ignore errors
+                if (activeChartStrategyId !== h_row) {
+                    return;
+                }
+                console.error('Error fetching chart data:', err);
+                if (loadingOverlay) loadingOverlay.classList.add('hidden');
+                const statsInfo = document.getElementById('chart-stats-info');
+                if (statsInfo) statsInfo.innerText = `Error: ${err.message}`;
+            }
+        }
+
+        function renderStrategyChartCanvas(data) {
+            const container = document.getElementById('strategyChartCanvasContainer');
+            if (!container) return;
+            
+            // Guard: If the modal is closed, do not render
+            if (!activeChartStrategyId) {
+                return;
+            }
+            
+            // Timezone helper to shift UTC timestamp to match user's local time in TradingView
+            function timeToLocal(originalTime) {
+                const d = new Date(originalTime * 1000);
+                return Date.UTC(
+                    d.getFullYear(), 
+                    d.getMonth(), 
+                    d.getDate(), 
+                    d.getHours(), 
+                    d.getMinutes(), 
+                    d.getSeconds(), 
+                    d.getMilliseconds()
+                ) / 1000;
+            }
+            
+            // Format timestamps & values to OHLC object format
+            const formattedData = data.map(item => {
+                let openVal, highVal, lowVal, closeVal;
+                
+                if (activeChartSeriesType === 'buy') {
+                    openVal = item.buy.open;
+                    highVal = item.buy.high;
+                    lowVal = item.buy.low;
+                    closeVal = item.buy.close;
+                } else if (activeChartSeriesType === 'sell') {
+                    openVal = item.sell.open;
+                    highVal = item.sell.high;
+                    lowVal = item.sell.low;
+                    closeVal = item.sell.close;
+                } else {
+                    // mid
+                    openVal = (item.buy.open + item.sell.open) / 2;
+                    highVal = (item.buy.high + item.sell.high) / 2;
+                    lowVal = (item.buy.low + item.sell.low) / 2;
+                    closeVal = (item.buy.close + item.sell.close) / 2;
+                }
+                
+                return {
+                    time: timeToLocal(item.time), // Adjusted for local timezone
+                    open: parseFloat(openVal),
+                    high: parseFloat(highVal),
+                    low: parseFloat(lowVal),
+                    close: parseFloat(closeVal),
+                    volume: item.volume || 0
+                };
+            });
+            
+            try {
+                const savedTheme = localStorage.getItem('trade_hub_theme') || 'safehouse';
+                const isDark = !(savedTheme === 'light_glacier' || savedTheme === 'warm_cream');
+                
+                const textColor = isDark ? '#a3a3a3' : '#475569';
+                const gridColor = isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.04)';
+                const borderColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)';
+                const crosshairColor = isDark ? 'rgba(255, 255, 255, 0.35)' : 'rgba(0, 0, 0, 0.22)';
+
+                if (!chartInstance) {
+                    // Initialize TradingView chart
+                    chartInstance = LightweightCharts.createChart(container, {
+                        layout: {
+                            textColor: textColor,
+                            background: { type: 'solid', color: 'transparent' },
+                        },
+                        grid: {
+                            vertLines: { color: gridColor },
+                            horzLines: { color: gridColor },
+                        },
+                        rightPriceScale: {
+                            borderColor: borderColor,
+                            visible: true,
+                            autoScale: true,
+                            alignLabels: true,
+                        },
+                        timeScale: {
+                            borderColor: borderColor,
+                            timeVisible: true,
+                            secondsVisible: false,
+                            rightOffset: 5,
+                            barSpacing: 8,
+                        },
+                        crosshair: {
+                            mode: 0, // Normal crosshair
+                            vertLine: {
+                                color: crosshairColor,
+                                width: 1,
+                                style: 3, // dashed
+                                labelVisible: true,
+                            },
+                            horzLine: {
+                                color: crosshairColor,
+                                width: 1,
+                                style: 3, // dashed
+                                labelVisible: true,
+                            },
+                        },
+                        localization: {
+                            priceFormatter: price => price.toFixed(2),
+                        },
+                        handleScale: {
+                            axisPressedMouseMove: true,
+                            mouseWheel: true,
+                            pinch: true,
+                        },
+                        handleScroll: {
+                            mouseWheel: true,
+                            pressedMouseMove: true,
+                            horzTouchDrag: true,
+                            vertTouchDrag: true,
+                        }
+                    });
+                    
+                    // Force an initial resize call to ensure the chart occupies correct container dimensions
+                    handleChartResize();
+                } else {
+                    // Dynamically apply visual theme updates to match the dashboard settings
+                    chartInstance.applyOptions({
+                        layout: { textColor: textColor },
+                        grid: {
+                            vertLines: { color: gridColor },
+                            horzLines: { color: gridColor },
+                        },
+                        rightPriceScale: { borderColor: borderColor },
+                        timeScale: { borderColor: borderColor },
+                        crosshair: {
+                            vertLine: { color: crosshairColor },
+                            horzLine: { color: crosshairColor },
+                        }
+                    });
+                }
+
+                if (activeChartStyle === 'candlestick') {
+                    if (lineSeries) {
+                        try { chartInstance.removeSeries(lineSeries); } catch(e) {}
+                        lineSeries = null;
+                    }
+                    if (!candlestickSeries) {
+                        candlestickSeries = chartInstance.addCandlestickSeries({
+                            upColor: '#26a69a', // TradingView Green
+                            downColor: '#ef5350', // TradingView Red
+                            borderVisible: false,
+                            wickUpColor: '#26a69a',
+                            wickDownColor: '#ef5350',
+                        });
+                    }
+                    candlestickSeries.setData(formattedData);
+                } else {
+                    if (candlestickSeries) {
+                        try { chartInstance.removeSeries(candlestickSeries); } catch(e) {}
+                        candlestickSeries = null;
+                    }
+                    if (!lineSeries) {
+                        lineSeries = chartInstance.addLineSeries({
+                            color: '#26a69a', // TradingView Green
+                            lineWidth: 2,
+                            crosshairMarkerVisible: true,
+                        });
+                    }
+                    lineSeries.setData(formattedData.map(item => ({ time: item.time, value: item.close })));
+                }
+
+                // Volume Series Drawing
+                if (!volumeSeries) {
+                    volumeSeries = chartInstance.addHistogramSeries({
+                        priceFormat: {
+                            type: 'volume',
+                        },
+                        priceScaleId: '', // Overlay style
+                    });
+                    
+                    volumeSeries.priceScale().applyOptions({
+                        scaleMargins: {
+                            top: 0.75, // volume series occupies the bottom 25% of the chart
+                            bottom: 0,
+                        },
+                    });
+                }
+                const volumeData = formattedData.map(item => {
+                    const isUp = item.close >= item.open;
+                    return {
+                        time: item.time,
+                        value: item.volume,
+                        color: isUp ? 'rgba(38, 166, 154, 0.45)' : 'rgba(239, 83, 80, 0.45)'
+                    };
+                });
+                volumeSeries.setData(volumeData);
+
+                // Clear existing indicator overlays before redrawing to prevent ghosts
+                if (smaSeriesInstance) {
+                    try { chartInstance.removeSeries(smaSeriesInstance); } catch(e) {}
+                    smaSeriesInstance = null;
+                }
+                if (emaSeriesInstance) {
+                    try { chartInstance.removeSeries(emaSeriesInstance); } catch(e) {}
+                    emaSeriesInstance = null;
+                }
+                if (bbUpperSeriesInstance) {
+                    try { chartInstance.removeSeries(bbUpperSeriesInstance); } catch(e) {}
+                    bbUpperSeriesInstance = null;
+                }
+                if (bbMiddleSeriesInstance) {
+                    try { chartInstance.removeSeries(bbMiddleSeriesInstance); } catch(e) {}
+                    bbMiddleSeriesInstance = null;
+                }
+                if (bbLowerSeriesInstance) {
+                    try { chartInstance.removeSeries(bbLowerSeriesInstance); } catch(e) {}
+                    bbLowerSeriesInstance = null;
+                }
+
+                // Draw technical indicators based on selector selection
+                if (formattedData.length > 0) {
+                    if (activeChartIndicator === 'sma') {
+                        const smaData = calculateSMA(formattedData, 20);
+                        smaSeriesInstance = chartInstance.addLineSeries({
+                            color: '#2196f3', // Blue
+                            lineWidth: 1.5,
+                            title: 'SMA (20)',
+                            priceLineVisible: false,
+                        });
+                        smaSeriesInstance.setData(smaData);
+                    } else if (activeChartIndicator === 'ema') {
+                        const emaData = calculateEMA(formattedData, 50);
+                        emaSeriesInstance = chartInstance.addLineSeries({
+                            color: '#ff9800', // Orange
+                            lineWidth: 1.5,
+                            title: 'EMA (50)',
+                            priceLineVisible: false,
+                        });
+                        emaSeriesInstance.setData(emaData);
+                    } else if (activeChartIndicator === 'bb') {
+                        const bbData = calculateBollingerBands(formattedData, 20, 2);
+                        bbUpperSeriesInstance = chartInstance.addLineSeries({
+                            color: 'rgba(33, 150, 243, 0.4)',
+                            lineWidth: 1.0,
+                            title: 'BB Upper',
+                            priceLineVisible: false,
+                        });
+                        bbMiddleSeriesInstance = chartInstance.addLineSeries({
+                            color: 'rgba(33, 150, 243, 0.4)',
+                            lineWidth: 1.0,
+                            style: 3, // dashed
+                            title: 'BB Basis',
+                            priceLineVisible: false,
+                        });
+                        bbLowerSeriesInstance = chartInstance.addLineSeries({
+                            color: 'rgba(33, 150, 243, 0.4)',
+                            lineWidth: 1.0,
+                            title: 'BB Lower',
+                            priceLineVisible: false,
+                        });
+                        bbUpperSeriesInstance.setData(bbData.upper);
+                        bbMiddleSeriesInstance.setData(bbData.middle);
+                        bbLowerSeriesInstance.setData(bbData.lower);
+                    }
+                }
+            } catch (err) {
+                console.error("Error drawing series, resetting chart instance:", err);
+                if (chartInstance) {
+                    try { chartInstance.remove(); } catch(e) {}
+                    chartInstance = null;
+                    candlestickSeries = null;
+                    lineSeries = null;
+                    volumeSeries = null;
+                    smaSeriesInstance = null;
+                    emaSeriesInstance = null;
+                    bbUpperSeriesInstance = null;
+                    bbMiddleSeriesInstance = null;
+                    bbLowerSeriesInstance = null;
+                }
+                return;
+            }
+            
+            // 1. Calculate and update Today's Total Volume
+            const startOfToday = new Date();
+            startOfToday.setHours(0, 0, 0, 0);
+            const todayUnix = Date.UTC(
+                startOfToday.getFullYear(),
+                startOfToday.getMonth(),
+                startOfToday.getDate(),
+                0, 0, 0, 0
+            ) / 1000;
+            
+            let todayTotalVolume = 0;
+            formattedData.forEach(item => {
+                // time has been shifted to local, so we can compare it directly
+                if (item.time >= todayUnix) {
+                    todayTotalVolume += item.volume || 0;
+                }
+            });
+            const todayVolumeEl = document.getElementById('chart-today-volume');
+            if (todayVolumeEl) {
+                todayVolumeEl.innerText = todayTotalVolume > 0 ? todayTotalVolume.toLocaleString() : '--';
+            }
+
+            // 2. Helper to display values in the legend
+            function updateLegend(candle) {
+                if (!candle) {
+                    document.getElementById('legend-open').innerText = '--';
+                    document.getElementById('legend-high').innerText = '--';
+                    document.getElementById('legend-low').innerText = '--';
+                    document.getElementById('legend-close').innerText = '--';
+                    document.getElementById('legend-volume').innerText = '--';
+                    return;
+                }
+                document.getElementById('legend-open').innerText = candle.open.toFixed(2);
+                document.getElementById('legend-high').innerText = candle.high.toFixed(2);
+                document.getElementById('legend-low').innerText = candle.low.toFixed(2);
+                document.getElementById('legend-close').innerText = candle.close.toFixed(2);
+                document.getElementById('legend-volume').innerText = candle.volume !== undefined && candle.volume !== null ? candle.volume.toLocaleString() : '--';
+            }
+
+            // Set default values to the last candle
+            if (formattedData.length > 0) {
+                updateLegend(formattedData[formattedData.length - 1]);
+            } else {
+                updateLegend(null);
+            }
+
+            // 3. Subscribe to crosshair movement to update legend dynamically on hover
+            if (chartInstance && !chartInstance._crosshairSubscribed) {
+                chartInstance.subscribeCrosshairMove(param => {
+                    if (param.time) {
+                        const candle = formattedData.find(item => item.time === param.time);
+                        if (candle) {
+                            updateLegend(candle);
+                        }
+                    } else if (formattedData.length > 0) {
+                        // Restore last candle values
+                        updateLegend(formattedData[formattedData.length - 1]);
+                    } else {
+                        updateLegend(null);
+                    }
+                });
+                chartInstance._crosshairSubscribed = true;
+            }
+            
+            if (shouldFitContent && formattedData.length > 0) {
+                // Wait briefly for redraw before fitting scales
+                setTimeout(() => {
+                    if (chartInstance) {
+                        chartInstance.timeScale().fitContent();
+                    }
+                }, 50);
+                shouldFitContent = false;
+            }
         }
 
         async function importAllPositionsFromBroker(btn = null) {

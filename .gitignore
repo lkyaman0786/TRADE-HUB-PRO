@@ -1,9 +1,13 @@
 # Sensitive credentials and session tokens
 client_config.json
 tokens.json
+users.json
+.env
+
 
 # Large downloaded database / master files
 OpenAPIScripMaster.json
+ticks.db
 
 # Logs and diagnostics
 *.log
@@ -15,3 +19,4 @@ __pycache__/
 
 # Local binary wheels
 *.whl
+

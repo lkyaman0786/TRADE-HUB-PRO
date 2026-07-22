@@ -40,14 +40,17 @@ import datetime
 from datetime import datetime, date
 import threading
 import webbrowser
-from flask import Flask, jsonify, request, send_from_directory
+import sqlite3
+import hashlib
+from flask import Flask, jsonify, request, send_from_directory, session, redirect, url_for, render_template
 import requests
+
 
 # Monkey patch requests to prevent any infinite hangs in external libraries
 _original_send = requests.Session.send
 def _patched_send(self, request, **kwargs):
     if 'timeout' not in kwargs or kwargs['timeout'] is None:
-        kwargs['timeout'] = 6.0
+        kwargs['timeout'] = 15.0
     return _original_send(self, request, **kwargs)
 requests.Session.send = _patched_send
 
@@ -522,7 +525,11 @@ class UnifiedBrokerClient:
             self.profile["error_details"] = "API Key, Client Code, and MPIN are required."
             return False
 
-        obj = SmartConnect(api_key=api_key)
+        # Use a larger timeout (default 25 seconds) to avoid connect/read timeouts under slow network or broker API congestion
+        api_timeout = 25
+        if isinstance(config, dict):
+            api_timeout = config.get("api_timeout") or creds.get("api_timeout") or 25
+        obj = SmartConnect(api_key=api_key, timeout=api_timeout)
         
         # Check tokens.json for active cached session (only if no new OTP entered)
         if not entered_otp and os.path.exists(TOKENS_FILE):
@@ -1898,6 +1905,129 @@ class UnifiedBrokerClient:
                 log_message("WARNING", f"Failed to fetch live margin from broker {self.broker}: {e}")
         return self._estimate_fallback_margin(legs, strategy_lot)
 
+    def get_historical_candles(self, exch_seg, token, symbol, interval, from_date, to_date):
+        """
+        Fetches historical candles for a specific token/contract from the connected broker.
+        Returns a list of candles: [{"time": unix_timestamp, "open": o, "high": h, "low": l, "close": c, "volume": v}]
+        """
+        if not self.connected or self.client_obj is None:
+            return []
+            
+        try:
+            if self.broker == "ANGEL_ONE" and isinstance(self.client_obj, SmartConnect):
+                # Self-throttling rate limiter to keep Angel One requests under 3 calls per second (0.4s gap)
+                with self.api_lock:
+                    now = time.time()
+                    last_fetch = getattr(self, "last_historical_fetch_time", 0.0)
+                    elapsed = now - last_fetch
+                    if elapsed < 0.4:
+                        time.sleep(0.4 - elapsed)
+                    self.last_historical_fetch_time = time.time()
+
+                # Map interval
+                tf_map = {
+                    "1m": "ONE_MINUTE",
+                    "5m": "FIVE_MINUTE",
+                    "15m": "FIFTEEN_MINUTE",
+                    "30m": "THIRTY_MINUTE",
+                    "1h": "ONE_HOUR",
+                    "1d": "ONE_DAY"
+                }
+                interval_mapped = tf_map.get(interval, "ONE_MINUTE")
+                params = {
+                    "exchange": exch_seg,
+                    "symboltoken": token,
+                    "interval": interval_mapped,
+                    "fromdate": from_date.strftime("%Y-%m-%d %H:%M"),
+                    "todate": to_date.strftime("%Y-%m-%d %H:%M")
+                }
+                res = self.client_obj.getCandleData(params)
+                if res and res.get("status") is True and res.get("data"):
+                    candles = []
+                    for row in res["data"]:
+                        # Parse date string (e.g. "2026-07-08T09:15:00+05:30")
+                        dt_str = row[0]
+                        if "+" in dt_str:
+                            dt_str = dt_str.split("+")[0]
+                        dt = datetime.strptime(dt_str, "%Y-%m-%dT%H:%M:%S")
+                        ts = int(dt.timestamp())
+                        candles.append({
+                            "time": ts,
+                            "open": float(row[1]),
+                            "high": float(row[2]),
+                            "low": float(row[3]),
+                            "close": float(row[4]),
+                            "volume": int(row[5])
+                        })
+                    return candles
+                    
+            elif self.broker == "ZERODHA" and self._kite_obj is not None:
+                tf_map = {
+                    "1m": "minute",
+                    "5m": "5minute",
+                    "15m": "15minute",
+                    "30m": "30minute",
+                    "1h": "60minute",
+                    "1d": "day"
+                }
+                interval_mapped = tf_map.get(interval, "minute")
+                res = self.client_obj.historical_data(
+                    instrument_token=int(token),
+                    from_date=from_date,
+                    to_date=to_date,
+                    interval=interval_mapped
+                )
+                if res:
+                    candles = []
+                    for row in res:
+                        candles.append({
+                            "time": int(row["date"].timestamp()),
+                            "open": float(row["open"]),
+                            "high": float(row["high"]),
+                            "low": float(row["low"]),
+                            "close": float(row["close"]),
+                            "volume": int(row["volume"] or 0)
+                        })
+                    return candles
+                    
+            elif self.broker == "FYERS":
+                tf_map = {
+                    "1m": "1",
+                    "5m": "5",
+                    "15m": "15",
+                    "30m": "30",
+                    "1h": "60",
+                    "1d": "D"
+                }
+                interval_mapped = tf_map.get(interval, "1")
+                # Fyers expects exchange prefix in symbol
+                fyers_sym = f"{exch_seg}:{symbol}"
+                data = {
+                    "symbol": fyers_sym,
+                    "resolution": interval_mapped,
+                    "date_format": "1",
+                    "range_from": from_date.strftime("%Y-%m-%d"),
+                    "range_to": to_date.strftime("%Y-%m-%d"),
+                    "cont_flag": "1"
+                }
+                res = self.client_obj.history(data=data)
+                if res and res.get("s") == "ok" and res.get("candles"):
+                    candles = []
+                    for row in res["candles"]:
+                        candles.append({
+                            "time": int(row[0]),
+                            "open": float(row[1]),
+                            "high": float(row[2]),
+                            "low": float(row[3]),
+                            "close": float(row[4]),
+                            "volume": int(row[5])
+                        })
+                    return candles
+        except Exception as e:
+            log_message("WARNING", f"Error fetching historical candles from broker {self.broker}: {e}")
+            
+        return []
+
 
 
 # Global Broker Wrapper Instantiation
@@ -2137,6 +2267,90 @@ def execute_strategy_trade(obj, strategy, action_type):
 # ==========================================
 # 6. LOCAL PERSISTENCE HELPERS
 # ==========================================
+DATABASE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ticks.db")
+
+def init_db():
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ticks (
+                strategy_id TEXT,
+                timestamp INTEGER,
+                buy_diff REAL,
+                sell_diff REAL
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_strategy_ticks ON ticks(strategy_id, timestamp)")
+        conn.commit()
+        conn.close()
+        log_message("SUCCESS", f"SQLite Database initialized successfully at '{DATABASE_PATH}'")
+    except Exception as e:
+        log_message("ERROR", f"Failed to initialize SQLite Database: {e}")
+
+def get_aggregated_chart_data(strategy_id, timeframe):
+    # Map timeframe string to seconds
+    tf_map = {
+        '1m': 60,
+        '5m': 300,
+        '10m': 600,
+        '15m': 900,
+        '30m': 1800,
+        '1h': 3600,
+        '1d': 86400
+    }
+    interval = tf_map.get(timeframe, 60)
+    
+    conn = sqlite3.connect(DATABASE_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT timestamp, buy_diff, sell_diff 
+        FROM ticks 
+        WHERE strategy_id = ? 
+        ORDER BY timestamp ASC
+    """, (strategy_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    
+    if not rows:
+        return []
+    
+    # Group ticks by interval
+    grouped = {}
+    for timestamp, buy_diff, sell_diff in rows:
+        group_time = (timestamp // interval) * interval
+        if group_time not in grouped:
+            grouped[group_time] = []
+        grouped[group_time].append((timestamp, buy_diff, sell_diff))
+        
+    chart_data = []
+    for g_time in sorted(grouped.keys()):
+        group_ticks = grouped[g_time]
+        group_ticks.sort(key=lambda x: x[0])
+        
+        buy_diffs = [x[1] for x in group_ticks]
+        sell_diffs = [x[2] for x in group_ticks]
+        
+        chart_data.append({
+            "time": g_time,
+            "buy": {
+                "open": buy_diffs[0],
+                "high": max(buy_diffs),
+                "low": min(buy_diffs),
+                "close": buy_diffs[-1]
+            },
+            "sell": {
+                "open": sell_diffs[0],
+                "high": max(sell_diffs),
+                "low": min(sell_diffs),
+                "close": sell_diffs[-1]
+            },
+            "buy_avg": round(sum(buy_diffs) / len(buy_diffs), 2),
+            "sell_avg": round(sum(sell_diffs) / len(sell_diffs), 2)
+        })
+        
+    return chart_data
+
 def save_strategies_to_disk():
     try:
         with open(STRATEGIES_FILE, "w") as f:
@@ -2388,6 +2602,7 @@ def run_trading_engine_thread():
                     continue
             
             # 4. Perform Badla Spread Calculations & Evaluate Triggers
+            ticks_to_save = []
             with state_lock:
                 for strat_id, strat in list(active_strategies.items()):
                     legs = strat["legs"]
@@ -2536,6 +2751,10 @@ def run_trading_engine_thread():
                         pnl = round(pnl, 2)
                     strat["pnl"] = pnl
                     
+                    # Record strategy spread ticks for historical charting
+                    if strat.get("buy_diff") is not None and strat.get("sell_diff") is not None:
+                        ticks_to_save.append((strat_id, int(time.time()), strat["buy_diff"], strat["sell_diff"]))
+                    
                     # 5. Check order triggers
                     if not engine_running:
                         strat["status"] = "[ENGINE STOPPED] Trade engine is paused."
@@ -2597,16 +2816,105 @@ def run_trading_engine_thread():
                     else:
                         strat["status"] = "Live update active."
             
+            # Save recorded ticks to database outside the state lock
+            if ticks_to_save:
+                try:
+                    conn = sqlite3.connect(DATABASE_PATH)
+                    cursor = conn.cursor()
+                    cursor.executemany("INSERT INTO ticks (strategy_id, timestamp, buy_diff, sell_diff) VALUES (?, ?, ?, ?)", ticks_to_save)
+                    conn.commit()
+                    conn.close()
+                except Exception as db_err:
+                    log_message("WARNING", f"Failed to save ticks to database: {db_err}")
+            
             time.sleep(1.5)
             
         except Exception as e:
             log_message("ERROR", f"Trading Engine loop caught exception: {e}")
             time.sleep(3.0)
 
+USERS_FILE = "users.json"
+
+def hash_password(pwd):
+    return hashlib.sha256(pwd.encode('utf-8')).hexdigest()
+
+def load_users():
+    if not os.path.exists(USERS_FILE):
+        default_users = {
+            "admin": {
+                "password_hash": hash_password("admin123"),
+                "role": "admin"
+            }
+        }
+        try:
+            with open(USERS_FILE, 'w') as f:
+                json.dump(default_users, f, indent=4)
+            log_message("INFO", "Created default users.json with admin credentials (admin / admin123).")
+        except Exception as e:
+            log_message("ERROR", f"Failed to write default users.json: {e}")
+        return default_users
+    try:
+        with open(USERS_FILE, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        log_message("ERROR", f"Failed to load users.json: {e}")
+        return {}
+
+def verify_user(username, password):
+    users = load_users()
+    u = users.get(username)
+    if u and u.get("password_hash") == hash_password(password):
+        return True, u.get("role", "user")
+    return False, None
+
 # ==========================================
 # 8. FLASK SERVER ENDPOINTS
 # ==========================================
 app = Flask(__name__, template_folder='templates')
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "trade_hub_pro_secret_key_998877")
+
+@app.before_request
+def check_authentication():
+    public_routes = ['login_view', 'static']
+    if request.endpoint in public_routes or request.path == '/login':
+        return None
+    
+    if not session.get('user'):
+        if request.path.startswith('/api/'):
+            return jsonify({"status": "error", "message": "Authentication required. Please login."}), 401
+        return redirect(url_for('login_view'))
+
+@app.route('/login', methods=['GET', 'POST'])
+def login_view():
+    if request.method == 'GET':
+        if session.get('user'):
+            return redirect(url_for('home'))
+        return send_from_directory('templates', 'login.html')
+    
+    data = request.json or request.form
+    username = (data.get('username') or '').strip()
+    password = data.get('password') or ''
+
+    if not username or not password:
+        return jsonify({"status": "error", "message": "Username and password are required."}), 400
+
+    valid, role = verify_user(username, password)
+    if valid:
+        session['user'] = username
+        session['role'] = role
+        log_message("SUCCESS", f"User '{username}' logged in successfully.")
+        return jsonify({"status": "success", "message": "Logged in successfully."})
+    else:
+        log_message("WARNING", f"Failed login attempt for username '{username}'.")
+        return jsonify({"status": "error", "message": "Invalid username or password."}), 401
+
+@app.route('/logout', methods=['GET', 'POST'])
+def user_logout():
+    user = session.pop('user', None)
+    session.pop('role', None)
+    if user:
+        log_message("INFO", f"User '{user}' logged out.")
+    return redirect(url_for('login_view'))
 
 @app.route('/')
 def home():
@@ -2614,6 +2922,7 @@ def home():
 
 # Registration OTP caching dictionary
 temp_otp_cache = {}
+
 
 def logout_helper():
     global unified_broker, engine_running
@@ -3309,9 +3618,226 @@ def delete_strategy():
             del active_strategies[h_row]
             save_strategies_to_disk()
             log_message("SUCCESS", f"Deleted Strategy ID: {h_row} ({symbol})")
+            
+            # Clean up tick history for deleted strategy
+            try:
+                conn = sqlite3.connect(DATABASE_PATH)
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM ticks WHERE strategy_id = ?", (h_row,))
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                log_message("WARNING", f"Failed to delete ticks for strategy {h_row}: {e}")
+                
             return jsonify({"status": "success"})
         else:
             return jsonify({"status": "error", "message": "Strategy ID not found"}), 404
+
+def aggregate_spread_candles(candles_list, target_tf):
+    if not candles_list:
+        return []
+    if target_tf != '10m':
+        return candles_list
+        
+    interval = 600 # 10 minutes in seconds
+    grouped = {}
+    for c in candles_list:
+        g_time = (c["time"] // interval) * interval
+        if g_time not in grouped:
+            grouped[g_time] = []
+        grouped[g_time].append(c)
+        
+    aggregated = []
+    for g_time in sorted(grouped.keys()):
+        group = grouped[g_time]
+        group.sort(key=lambda x: x["time"])
+        
+        buy_opens = group[0]["buy"]["open"]
+        buy_closes = group[-1]["buy"]["close"]
+        buy_highs = max(x["buy"]["high"] for x in group)
+        buy_lows = min(x["buy"]["low"] for x in group)
+        
+        sell_opens = group[0]["sell"]["open"]
+        sell_closes = group[-1]["sell"]["close"]
+        sell_highs = max(x["sell"]["high"] for x in group)
+        sell_lows = min(x["sell"]["low"] for x in group)
+        
+        vol = sum(x.get("volume", 0) for x in group)
+        
+        aggregated.append({
+            "time": g_time,
+            "buy": {
+                "open": buy_opens,
+                "high": buy_highs,
+                "low": buy_lows,
+                "close": buy_closes
+            },
+            "sell": {
+                "open": sell_opens,
+                "high": sell_highs,
+                "low": sell_lows,
+                "close": sell_closes
+            },
+            "buy_avg": round((buy_highs + buy_lows) / 2, 2),
+            "sell_avg": round((sell_highs + sell_lows) / 2, 2),
+            "volume": vol
+        })
+    return aggregated
+
+@app.route('/api/strategy/chart', methods=['GET'])
+def get_strategy_chart_data_api():
+    strategy_id = request.args.get("id")
+    timeframe = request.args.get("timeframe", "1m")
+    if not strategy_id:
+        return jsonify({"status": "error", "message": "Missing strategy id"}), 400
+        
+    with state_lock:
+        if strategy_id not in active_strategies:
+            return jsonify({"status": "error", "message": "Strategy not found"}), 404
+        strat = active_strategies[strategy_id]
+        legs = list(strat.get("legs", []))
+        
+    # Check if we can fetch from the broker
+    if unified_broker.connected and legs and all(leg.get("token") for leg in legs):
+        try:
+            from datetime import timedelta
+            now = datetime.now()
+            to_date = now
+            
+            # Request expanded historical query ranges (to fetch much more back date data)
+            if timeframe == '1m':
+                from_date = now - timedelta(days=30)
+            elif timeframe == '5m' or timeframe == '10m':
+                from_date = now - timedelta(days=60)
+            elif timeframe == '15m' or timeframe == '30m':
+                from_date = now - timedelta(days=90)
+            elif timeframe == '1h':
+                from_date = now - timedelta(days=180)
+            else: # 1d
+                from_date = now - timedelta(days=730)
+                
+            broker_timeframe = timeframe
+            if timeframe == '10m':
+                broker_timeframe = '5m' # Fetch 5m candles and aggregate in Python
+                
+            leg_histories = []
+            for leg in legs:
+                token = leg.get("token")
+                exch_seg = leg.get("exch_seg", "NFO")
+                symbol = leg.get("symbol")
+                lot = float(leg.get("lot", 1.0) or 1.0)
+                action = leg.get("action", "BUY").upper()
+                sign = 1.0 if action == "BUY" else -1.0
+                
+                # Fetch leg candles from broker
+                candles = unified_broker.get_historical_candles(exch_seg, token, symbol, broker_timeframe, from_date, to_date)
+                if not candles:
+                    # If any leg has no history, raise to fall back to SQLite
+                    raise Exception(f"No historical candles returned for leg {symbol}")
+                    
+                candles_dict = {c["time"]: c for c in candles}
+                leg_histories.append({
+                    "sign": sign,
+                    "lot": lot,
+                    "candles": candles_dict,
+                    "raw_list": candles
+                })
+                
+            # Find common timestamps
+            all_timestamps = set()
+            for lh in leg_histories:
+                all_timestamps.update(lh["candles"].keys())
+            sorted_timestamps = sorted(list(all_timestamps))
+            
+            # Forward-fill state tracker
+            last_closes = {}
+            last_volumes = {}
+            for idx, lh in enumerate(leg_histories):
+                # Default to first available close/volume or 0
+                last_closes[idx] = lh["raw_list"][0]["close"] if lh["raw_list"] else 0.0
+                last_volumes[idx] = lh["raw_list"][0].get("volume", 0) if lh["raw_list"] else 0
+                
+            chart_data = []
+            for t in sorted_timestamps:
+                # Update last seen close prices and volumes for legs that have a candle at this timestamp
+                for idx, lh in enumerate(leg_histories):
+                    if t in lh["candles"]:
+                        last_closes[idx] = lh["candles"][t]["close"]
+                        last_volumes[idx] = lh["candles"][t].get("volume", 0)
+                        
+                buy_open = 0.0
+                buy_close = 0.0
+                buy_high = 0.0
+                buy_low = 0.0
+                
+                sell_open = 0.0
+                sell_close = 0.0
+                sell_high = 0.0
+                sell_low = 0.0
+                
+                volume_sum = 0
+                
+                for idx, lh in enumerate(leg_histories):
+                    sign = lh["sign"]
+                    lot = lh["lot"]
+                    
+                    if t in lh["candles"]:
+                        c = lh["candles"][t]
+                        o, h, l, cl = c["open"], c["high"], c["low"], c["close"]
+                        vol = c.get("volume", 0)
+                    else:
+                        # Forward-filled values
+                        o = h = l = cl = last_closes[idx]
+                        vol = last_volumes[idx]
+                        
+                    # Calculate Buy Spread (using leg prices)
+                    buy_open += sign * lot * o
+                    buy_close += sign * lot * cl
+                    buy_high += lot * (h if sign > 0.0 else -l)
+                    buy_low += lot * (l if sign > 0.0 else -h)
+                    
+                    # Calculate Sell Spread (approximated same as buy spread for historical data)
+                    sell_open += sign * lot * o
+                    sell_close += sign * lot * cl
+                    sell_high += lot * (h if sign > 0.0 else -l)
+                    sell_low += lot * (l if sign > 0.0 else -h)
+                    
+                    volume_sum += vol
+                    
+                chart_data.append({
+                    "time": t,
+                    "buy": {
+                        "open": round(buy_open, 2),
+                        "high": round(buy_high, 2),
+                        "low": round(buy_low, 2),
+                        "close": round(buy_close, 2)
+                    },
+                    "sell": {
+                        "open": round(sell_open, 2),
+                        "high": round(sell_high, 2),
+                        "low": round(sell_low, 2),
+                        "close": round(sell_close, 2)
+                    },
+                    "buy_avg": round((buy_high + buy_low) / 2, 2),
+                    "sell_avg": round((sell_high + sell_low) / 2, 2),
+                    "volume": volume_sum
+                })
+                
+            # Perform aggregation if target timeframe is 10m
+            if timeframe == '10m':
+                chart_data = aggregate_spread_candles(chart_data, '10m')
+                
+            return jsonify({"status": "success", "data": chart_data, "source": "broker"})
+        except Exception as broker_err:
+            log_message("WARNING", f"Historical broker chart fetch failed for {strategy_id}, falling back to local database: {broker_err}")
+            
+    # Fallback to local SQLite tick database
+    try:
+        data = get_aggregated_chart_data(strategy_id, timeframe)
+        return jsonify({"status": "success", "data": data, "source": "local_db"})
+    except Exception as e:
+        log_message("ERROR", f"Error fetching chart data from database: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/strategy/position/detect', methods=['POST'])
 def detect_strategy_position():
@@ -3778,11 +4304,11 @@ def chat_api():
 # ==========================================
 # 9. MAIN RUNNER & AUTO-LAUNCHER
 # ==========================================
-def launch_web_browser():
+def launch_web_browser(port):
     """Waiting for Flask thread to initialize before launching the web browser."""
     time.sleep(1.5)
-    log_message("INFO", "Auto-launching local Trade Hub Dashboard in your browser...")
-    webbrowser.open("http://127.0.0.1:5000")
+    log_message("INFO", f"Auto-launching local Trade Hub Dashboard in your browser on port {port}...")
+    webbrowser.open(f"http://127.0.0.1:{port}")
 
 def main():
     global lookup_engine, unified_broker
@@ -3790,6 +4316,9 @@ def main():
     print("\n" + "="*70)
     print("  COMMERCIAL MULTI-BROKER OPTIONS TRADE HUB ENGINE RUNNING (PREMIUM DASHBOARD)")
     print("="*70 + "\n")
+    
+    # Initialize SQLite Database
+    init_db()
     
     # Initialize unified broker client
     unified_broker = UnifiedBrokerClient()
@@ -3808,25 +4337,31 @@ def main():
     trading_thread = threading.Thread(target=run_trading_engine_thread, daemon=True)
     trading_thread.start()
     
-    # 5. Start browser auto-launcher
-    launcher_thread = threading.Thread(target=launch_web_browser, daemon=True)
-    launcher_thread.start()
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", 5000))
+    is_cloud = bool(os.environ.get("PORT") or os.environ.get("RAILWAY_STATIC_URL") or os.environ.get("RENDER"))
+
+    # 5. Start browser auto-launcher (only when running locally)
+    if not is_cloud:
+        launcher_thread = threading.Thread(target=launch_web_browser, args=(port,), daemon=True)
+        launcher_thread.start()
     
-    # 6. Initialize Flask local server
-    log_message("INFO", "Starting Flask application local Web Server on port 5000...")
+    # 6. Initialize Flask server
+    log_message("INFO", f"Starting Flask application Web Server on {host}:{port}...")
     try:
-        app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
+        app.run(host=host, port=port, debug=False, use_reloader=False)
     except OSError as e:
         if "Address already in use" in str(e) or "10048" in str(e):
             print("\n" + "="*80)
-            print(" [CRITICAL] PORT 5000 IS ALREADY IN USE BY ANOTHER PROCESS!")
+            print(f" [CRITICAL] PORT {port} IS ALREADY IN USE BY ANOTHER PROCESS!")
             print(" Please close any other running python or terminal windows of Trade Hub.")
             print(" If the error persists, restart your computer or kill zombie python processes.")
             print("="*80 + "\n")
-            log_message("CRITICAL", "Port 5000 in use. Flask crashed.")
+            log_message("CRITICAL", f"Port {port} in use. Flask crashed.")
             sys.exit(1)
         else:
             raise e
 
 if __name__ == "__main__":
     main()
+
