@@ -21,14 +21,12 @@ def bootstrap_packages():
             
     if missing_packages:
         print(f"[BOOTSTRAP] Missing packages detected: {missing_packages}")
-        print("[BOOTSTRAP] Installing missing packages automatically using pip...")
+        print("[BOOTSTRAP] Attempting to install missing packages...")
         try:
             subprocess.check_call([sys.executable, "-m", "pip", "install", *missing_packages])
             print("[BOOTSTRAP] All missing packages installed successfully!\n")
         except Exception as e:
-            print(f"[BOOTSTRAP] [ERROR] Failed to install packages: {e}")
-            print("[BOOTSTRAP] Please install them manually using 'pip install ...'")
-            sys.exit(1)
+            print(f"[BOOTSTRAP] [WARNING] Could not auto-install via pip: {e}. Continuing with available modules.")
 
 bootstrap_packages()
 
