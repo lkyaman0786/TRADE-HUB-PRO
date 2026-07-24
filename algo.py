@@ -2898,49 +2898,6 @@ def init_app_engine():
 init_app_engine()
 
 
-@app.before_request
-def check_authentication():
-    public_routes = ['login_view', 'static']
-    if request.endpoint in public_routes or request.path == '/login':
-        return None
-    
-    if not session.get('user'):
-        if request.path.startswith('/api/'):
-            return jsonify({"status": "error", "message": "Authentication required. Please login."}), 401
-        return redirect(url_for('login_view'))
-
-@app.route('/login', methods=['GET', 'POST'])
-def login_view():
-    if request.method == 'GET':
-        if session.get('user'):
-            return redirect(url_for('home'))
-        return send_from_directory('templates', 'login.html')
-    
-    data = request.json or request.form
-    username = (data.get('username') or '').strip()
-    password = data.get('password') or ''
-
-    if not username or not password:
-        return jsonify({"status": "error", "message": "Username and password are required."}), 400
-
-    valid, role = verify_user(username, password)
-    if valid:
-        session['user'] = username
-        session['role'] = role
-        log_message("SUCCESS", f"User '{username}' logged in successfully.")
-        return jsonify({"status": "success", "message": "Logged in successfully."})
-    else:
-        log_message("WARNING", f"Failed login attempt for username '{username}'.")
-        return jsonify({"status": "error", "message": "Invalid username or password."}), 401
-
-@app.route('/logout', methods=['GET', 'POST'])
-def user_logout():
-    user = session.pop('user', None)
-    session.pop('role', None)
-    if user:
-        log_message("INFO", f"User '{user}' logged out.")
-    return redirect(url_for('login_view'))
-
 @app.route('/')
 def home():
     return send_from_directory('templates', 'index.html')
@@ -3260,15 +3217,14 @@ def start_engine():
 @app.route('/api/engine/stop', methods=['POST'])
 def stop_engine():
     global engine_running
-    logout_helper()
-    panic_stop_helper()
-    log_message("WARNING", "Trading Engine STOPPED and logged out.")
+    with state_lock:
+        engine_running = False
+    log_message("WARNING", "Trading Engine STOPPED.")
     return jsonify({"status": "success"})
 
 @app.route('/api/engine/panic-stop', methods=['POST'])
 def panic_stop():
     panic_stop_helper()
-    logout_helper()
     return jsonify({"status": "success"})
 
 @app.route('/api/strategy/add', methods=['POST'])
