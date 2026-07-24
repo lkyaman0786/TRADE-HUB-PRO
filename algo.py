@@ -2900,6 +2900,8 @@ init_app_engine()
 
 @app.route('/')
 def home():
+    if os.path.exists('index.html'):
+        return send_file('index.html')
     return send_from_directory('templates', 'index.html')
 
 # Registration OTP caching dictionary
