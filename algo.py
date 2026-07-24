@@ -55,9 +55,10 @@ requests.Session.send = _patched_send
 # Import SmartApi from AngelOne
 try:
     from SmartApi import SmartConnect
+    ANGEL_AVAILABLE = True
 except ImportError:
-    print("[ERROR] SmartApi module not found! Please run 'pip install smartapi-python'")
-    sys.exit(1)
+    ANGEL_AVAILABLE = False
+    print("[WARNING] SmartApi (smartapi-python) not installed. Angel One broker will not be available.")
 
 # Import Fyers API v3 (optional - only required if user selects Fyers broker)
 try:
