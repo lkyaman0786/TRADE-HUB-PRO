@@ -387,7 +387,7 @@
 <body class="font-body text-xs min-h-screen flex flex-col overflow-hidden">
 
     <!-- 1. MULTI-STEP ONBOARDING WIZARD SCREEN (auth-screen) -->
-    <div id="auth-screen" class="hidden min-h-screen w-full flex flex-col justify-center items-center p-6 bg-surface-dim transition-all duration-300">
+    <div id="auth-screen" class="flex min-h-screen w-full flex-col justify-center items-center p-6 bg-surface-dim transition-all duration-300">
         <!-- Wizard Card -->
         <div class="w-full max-w-[800px] mb-8">
             <div class="flex items-center justify-between relative px-8">
@@ -1768,9 +1768,26 @@
                             }
                         }
                     }
+                } else {
+                    const authScreen = document.getElementById('auth-screen');
+                    const appScreen = document.getElementById('app-screen');
+                    if (authScreen && authScreen.classList.contains('hidden')) {
+                        authScreen.classList.remove('hidden');
+                        authScreen.classList.add('flex');
+                        if (appScreen) appScreen.classList.add('hidden');
+                        goToAuthStep(1);
+                    }
                 }
             } catch (err) {
                 console.error("Auth status query failed:", err);
+                const authScreen = document.getElementById('auth-screen');
+                const appScreen = document.getElementById('app-screen');
+                if (authScreen && authScreen.classList.contains('hidden')) {
+                    authScreen.classList.remove('hidden');
+                    authScreen.classList.add('flex');
+                    if (appScreen) appScreen.classList.add('hidden');
+                    goToAuthStep(1);
+                }
             } finally {
                 isAuthChecking = false;
             }
