@@ -1636,6 +1636,46 @@
         }
 
         
+        
+        // Multi-Tenant Auto-Tunnel Discovery
+        async function discoverLiveTunnel() {
+            if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') return;
+            try {
+                // Fetch the live URL published by the backend server via GitHub
+                const res = await fetch('https://raw.githubusercontent.com/lkyaman0786/TRADE-HUB-PRO/main/backend_url.txt?t=' + Date.now());
+                if (res.ok) {
+                    const text = await res.text();
+                    const url = text.trim();
+                    if (url.startsWith('http')) {
+                        const currentUrl = localStorage.getItem('th_backend_url');
+                        if (currentUrl !== url) {
+                            localStorage.setItem('th_backend_url', url);
+                            console.log("Auto-discovered live tunnel URL:", url);
+                        }
+                    }
+                }
+            } catch(e) {
+                console.log("Could not auto-discover tunnel URL.");
+            }
+        }
+        discoverLiveTunnel();
+
+        // Custom fetch wrapper to inject X-Client-Code header for multi-tenant isolation
+        async function apiFetch(path, options = {}) {
+            const url = getApiUrl(path);
+            const clientCode = localStorage.getItem('th_client_code') || '';
+            
+            if (!options.headers) options.headers = {};
+            if (!(options.body instanceof FormData) && !options.headers['Content-Type'] && options.method && options.method !== 'GET') {
+                options.headers['Content-Type'] = 'application/json';
+            }
+            if (clientCode) {
+                options.headers['X-Client-Code'] = clientCode;
+            }
+            
+            return fetch(url, options);
+        }
+
         function getBackendBaseUrl() {
             const saved = localStorage.getItem('th_backend_url');
             if (saved && saved.trim()) {
@@ -1664,19 +1704,21 @@
         }
 
         function saveBackendUrl() {
-            const url = document.getElementById('cfg-backend-url').value.trim();
+            const inputEl = document.getElementById('cfg-backend-url');
+            let url = inputEl ? inputEl.value.trim() : '';
             if (url) {
                 if (!url.startsWith('http://') && !url.startsWith('https://')) {
-                    alert('URL must start with http:// or https://');
+                    alert('URL must start with http:// or https:// (e.g. https://your-name.trycloudflare.com)');
                     return;
                 }
+                url = url.replace(/\/+$/, '');
                 localStorage.setItem('th_backend_url', url);
+                toggleBackendConfigModal(false);
+                alert('SUCCESS: Cloudflare Tunnel Connected!\nURL: ' + url + '\n\nReloading application...');
+                window.location.reload();
             } else {
-                localStorage.removeItem('th_backend_url');
+                alert('Please paste a valid Cloudflare Tunnel URL (starting with https://).');
             }
-            toggleBackendConfigModal(false);
-            alert('Backend Server URL saved! Reloading application...');
-            window.location.reload();
         }
 
         function clearBackendUrl() {
@@ -1690,7 +1732,7 @@
         // Fetch application state periodically (LTP, orders, strategies)
         async function fetchAppState() {
             try {
-                const res = await fetch(getApiUrl('/api/state'));
+                const res = await apiFetch('/api/state');
                 if (!res.ok) throw new Error('API server returned error');
                 const data = await res.json();
 
@@ -1813,7 +1855,7 @@
             if (isAuthChecking) return;
             isAuthChecking = true;
             try {
-                const res = await fetch(getApiUrl('/api/auth/status'));
+                const res = await apiFetch('/api/auth/status');
                 if (res.ok) {
                     const data = await res.json();
                     const authScreen = document.getElementById('auth-screen');
@@ -2498,7 +2540,7 @@
         async function updateStrategyHeader(h_row, field, value) {
             pendingUpdates[`${h_row}-${field}`] = Date.now();
             try {
-                const res = await fetch(getApiUrl('/api/strategy/update'), {
+                const res = await apiFetch('/api/strategy/update', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ header_row: h_row, field: field, value: value })
@@ -2512,7 +2554,7 @@
         async function updateLegField(h_row, leg_idx, field, value) {
             pendingUpdates[`${h_row}-${leg_idx}-${field}`] = Date.now();
             try {
-                const res = await fetch(getApiUrl('/api/strategy/leg/update'), {
+                const res = await apiFetch('/api/strategy/leg/update', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ header_row: h_row, leg_index: leg_idx, field: field, value: value })
@@ -2526,7 +2568,7 @@
 
         async function addLegToStrategy(h_row) {
             try {
-                const res = await fetch(getApiUrl('/api/strategy/leg/add'), {
+                const res = await apiFetch('/api/strategy/leg/add', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ header_row: h_row })
@@ -2544,7 +2586,7 @@
 
         async function deleteLegFromStrategy(h_row, leg_idx) {
             try {
-                const res = await fetch(getApiUrl('/api/strategy/leg/delete'), {
+                const res = await apiFetch('/api/strategy/leg/delete', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ header_row: h_row, leg_index: leg_idx })
@@ -2565,7 +2607,7 @@
             if (!strat) return;
             const newTrigger = strat.execute_trigger === 'GO' ? 'NONE' : 'GO';
             try {
-                await fetch(getApiUrl('/api/strategy/update'), {
+                await apiFetch('/api/strategy/update', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ header_row: h_row, field: 'execute_trigger', value: newTrigger })
@@ -2579,7 +2621,7 @@
         async function triggerPanicStop() {
             if (!confirm('EMERGENCY PANIC STOP: Cancel all triggers and stop monitoring immediately?')) return;
             try {
-                const res = await fetch(getApiUrl('/api/engine/panic-stop'), { method: 'POST' });
+                const res = await apiFetch('/api/engine/panic-stop', { method: 'POST' });
                 if (res.ok) fetchAppState();
             } catch (err) {
                 console.error(err);
@@ -2589,7 +2631,7 @@
         async function toggleEngine() {
             try {
                 // Determine engine state
-                const resStatus = await fetch(getApiUrl('/api/state'));
+                const resStatus = await apiFetch('/api/state');
                 const data = await resStatus.json();
                 const path = data.engine_running ? '/api/engine/stop' : '/api/engine/start';
                 
@@ -2603,7 +2645,7 @@
         async function deleteStrategy(h_row) {
             if (!confirm('Are you sure you want to delete this options strategy?')) return;
             try {
-                const res = await fetch(getApiUrl('/api/strategy/delete'), {
+                const res = await apiFetch('/api/strategy/delete', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ header_row: h_row })
@@ -2619,7 +2661,7 @@
 
         async function clearAllLogs() {
             try {
-                const res = await fetch(getApiUrl('/api/logs/clear'), { method: 'POST' });
+                const res = await apiFetch('/api/logs/clear', { method: 'POST' });
                 if (res.ok) {
                     lastConsoleLength = 0;
                     fetchAppState();
@@ -2633,7 +2675,7 @@
             if (!confirm('Disconnect session and log out of broker terminal?')) return;
             try {
                 sessionStorage.removeItem('th_active_session');
-                const res = await fetch(getApiUrl('/api/auth/logout'), { method: 'POST' });
+                const res = await apiFetch('/api/auth/logout', { method: 'POST' });
                 if (res.ok) {
                     localStorage.removeItem('th_registered_user');
                     window.location.reload();
@@ -3417,7 +3459,7 @@
             }
 
             try {
-                const response = await fetch(getApiUrl(`/api/strategy/chart?id=${h_row}&timeframe=${timeframe}`));
+                const response = await apiFetch(`/api/strategy/chart?id=${h_row}&timeframe=${timeframe}`);
                 if (!response.ok) throw new Error('API request failed');
                 
                 // Guard: If the modal was closed or switched to a different strategy, ignore in-flight updates
@@ -3821,7 +3863,7 @@
                 targetBtn.innerHTML = '<span class="material-symbols-outlined text-sm animate-spin">sync</span> IMPORTING...';
             }
             try {
-                const res = await fetch(getApiUrl('/api/strategy/import-all'), {
+                const res = await apiFetch('/api/strategy/import-all', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' }
                 });
@@ -3849,7 +3891,7 @@
             btn.disabled = true;
             btn.innerHTML = 'Detecting...';
             try {
-                const res = await fetch(getApiUrl('/api/strategy/position/detect'), {
+                const res = await apiFetch('/api/strategy/position/detect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ header_row: h_row })
@@ -3877,7 +3919,7 @@
             const pos = document.getElementById('pos-position').value;
             const avg = document.getElementById('pos-avg-diff').value;
             try {
-                const res = await fetch(getApiUrl('/api/strategy/position/update'), {
+                const res = await apiFetch('/api/strategy/position/update', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ header_row: h_row, position: pos, avg_entry_diff: avg })
@@ -3933,7 +3975,7 @@
             const legs = document.getElementById('form-legs-count').value;
 
             try {
-                const res = await fetch(getApiUrl('/api/strategy/add'), {
+                const res = await apiFetch('/api/strategy/add', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -4058,7 +4100,7 @@
             btn.innerText = 'Connecting Session...';
 
             try {
-                const res = await fetch(getApiUrl('/api/auth/register'), {
+                const res = await apiFetch('/api/auth/register', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -4122,7 +4164,7 @@
             btn.innerText = 'Verifying...';
 
             try {
-                const res = await fetch(getApiUrl('/api/auth/verify-otp'), {
+                const res = await apiFetch('/api/auth/verify-otp', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ otp: otpVal })
@@ -4208,7 +4250,7 @@
             input.disabled = true;
             document.getElementById('chatbot-send-btn').disabled = true;
 
-            fetch(getApiUrl('/api/chat'), {
+            apiFetch('/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: userText })
@@ -4224,7 +4266,10 @@
 
                 const botMsgDiv = document.createElement('div');
 
-                if (data.status === 'success') {
+                
+                        if (data.status === 'success') {
+                            localStorage.setItem('th_client_code', creds.client_code || name);
+
                     botMsgDiv.className = 'chat-message assistant';
                     botMsgDiv.innerHTML = formatMarkdown(data.reply);
                 } else {
@@ -4275,12 +4320,13 @@
                 <p class="text-[10px] text-on-surface-variant/70">e.g. https://your-name.trycloudflare.com (provided in terminal by start_online.bat)</p>
             </div>
 
-            <div class="flex items-center justify-end gap-3 pt-2">
-                <button onclick="clearBackendUrl()" class="px-3 py-1.5 rounded-lg border border-outline-variant/40 text-on-surface-variant hover:text-on-surface text-xs font-semibold transition-all">
-                    Reset (Local)
+            <div class="flex items-center justify-between pt-2 border-t border-outline-variant/20">
+                <button onclick="clearBackendUrl()" class="px-3 py-1.5 rounded-lg text-rose-400 hover:bg-rose-500/10 text-[11px] font-semibold transition-all">
+                    Clear Tunnel URL
                 </button>
-                <button onclick="saveBackendUrl()" class="px-4 py-1.5 rounded-lg bg-primary hover:bg-primary/90 text-white text-xs font-bold shadow-lg shadow-primary/20 transition-all">
-                    Save & Connect
+                <button onclick="saveBackendUrl()" class="px-5 py-2 rounded-lg bg-primary hover:bg-primary/90 text-white text-xs font-bold shadow-lg shadow-primary/30 transition-all flex items-center gap-2">
+                    <span class="material-symbols-outlined text-sm">link</span>
+                    SAVE & CONNECT TUNNEL
                 </button>
             </div>
         </div>

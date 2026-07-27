@@ -91,19 +91,70 @@ import io
 # ==========================================
 # 1. CORE CONFIGURATION & PERSISTENCE
 # ==========================================
-STRATEGIES_FILE = "strategies.json"
-TOKENS_FILE = "tokens.json"
-CLIENT_CONFIG_FILE = "client_config.json"
 
 # Thread safety locks
 state_lock = threading.RLock()
 
-# App State Globals
-active_strategies = {}
-app_logs = []
+
+# App State Globals (Migrated to Multi-Tenant)
+import contextvars
+client_ctx = contextvars.ContextVar('client_ctx', default='DEFAULT')
+
+class MultiTenantState:
+    def __init__(self):
+        self.sessions = {}
+        self.engine_running = False
+
+    def get_session(self, cc=None):
+        if cc is None:
+            cc = client_ctx.get()
+        if cc not in self.sessions:
+            self.sessions[cc] = {
+                'state.active_strategies': {},
+                'state.app_logs': [],
+                'state.unified_broker': None
+            }
+        return self.sessions[cc]
+
+    @property
+    def active_strategies(self):
+        return self.get_session()['state.active_strategies']
+        
+    @active_strategies.setter
+    def active_strategies(self, val):
+        self.get_session()['state.active_strategies'] = val
+
+    @property
+    def app_logs(self):
+        return self.get_session()['state.app_logs']
+
+    @property
+    def unified_broker(self):
+        return self.get_session()['state.unified_broker']
+        
+    @unified_broker.setter
+    def unified_broker(self, val):
+        self.get_session()['state.unified_broker'] = val
+
+
+    @property
+    def STRATEGIES_FILE(self):
+        cc = client_ctx.get()
+        return f"strategies_{cc}.json" if cc != 'DEFAULT' else "strategies.json"
+        
+    @property
+    def TOKENS_FILE(self):
+        cc = client_ctx.get()
+        return f"tokens_{cc}.json" if cc != 'DEFAULT' else "tokens.json"
+
+    @property
+    def CLIENT_CONFIG_FILE(self):
+        cc = client_ctx.get()
+        return f"client_config_{cc}.json" if cc != 'DEFAULT' else "client_config.json"
+
+state = MultiTenantState()
+
 lookup_engine = None
-unified_broker = None  # Instantiated dynamically below
-engine_running = False
 
 import random
 last_nifty_price = 24194.65
@@ -111,16 +162,16 @@ nifty_prev_close = 24021.65
 
 def get_nifty_live_price():
     global last_nifty_price, nifty_prev_close
-    if unified_broker and unified_broker.connected:
+    if state.unified_broker and state.unified_broker.connected:
         try:
-            if unified_broker.broker == "ANGEL_ONE":
-                res = unified_broker.get_market_data({"NSE": ["99926000"]})
+            if state.unified_broker.broker == "ANGEL_ONE":
+                res = state.unified_broker.get_market_data({"NSE": ["99926000"]})
                 if res and "99926000" in res:
                     last_nifty_price = res["99926000"]["ltp"]
                     if "close" in res["99926000"] and res["99926000"]["close"] > 0:
                         nifty_prev_close = res["99926000"]["close"]
-            elif unified_broker.broker == "FYERS":
-                res = unified_broker.get_market_data({"NSE": ["26000"]})
+            elif state.unified_broker.broker == "FYERS":
+                res = state.unified_broker.get_market_data({"NSE": ["26000"]})
                 if res and "26000" in res:
                     last_nifty_price = res["26000"]["ltp"]
                     if "close" in res["26000"] and res["26000"]["close"] > 0:
@@ -145,9 +196,9 @@ def log_message(level, message):
     print(full_msg)
     
     with state_lock:
-        app_logs.append(full_msg)
-        if len(app_logs) > 300:
-            app_logs.pop(0)
+        state.app_logs.append(full_msg)
+        if len(state.app_logs) > 300:
+            state.app_logs.pop(0)
 
 # ==========================================
 # 2. SCRIP MASTER LOOKUP ENGINE
@@ -423,9 +474,9 @@ class ScripMasterLookup:
 # 3. SAAS CLIENT CONFIGURATION HELPERS
 # ==========================================
 def load_client_config():
-    if os.path.exists(CLIENT_CONFIG_FILE):
+    if os.path.exists(state.CLIENT_CONFIG_FILE):
         try:
-            with open(CLIENT_CONFIG_FILE, "r") as f:
+            with open(state.CLIENT_CONFIG_FILE, "r") as f:
                 return json.load(f)
         except Exception as e:
             log_message("ERROR", f"Failed to load client config: {e}")
@@ -433,7 +484,7 @@ def load_client_config():
 
 def save_client_config(config_data):
     try:
-        with open(CLIENT_CONFIG_FILE, "w") as f:
+        with open(state.CLIENT_CONFIG_FILE, "w") as f:
             json.dump(config_data, f, indent=4)
         return True
     except Exception as e:
@@ -539,9 +590,9 @@ class UnifiedBrokerClient:
         obj = SmartConnect(api_key=api_key, timeout=api_timeout)
         
         # Check tokens.json for active cached session (only if no new OTP entered)
-        if not entered_otp and os.path.exists(TOKENS_FILE):
+        if not entered_otp and os.path.exists(state.TOKENS_FILE):
             try:
-                with open(TOKENS_FILE, "r") as f:
+                with open(state.TOKENS_FILE, "r") as f:
                     tokens = json.load(f)
                 
                 raw_jwt = tokens["jwtToken"].replace("Bearer ", "")
@@ -565,15 +616,15 @@ class UnifiedBrokerClient:
                 else:
                     log_message("WARNING", "Cached Angel One tokens expired or invalid. Clearing tokens.json...")
                     try:
-                        if os.path.exists(TOKENS_FILE):
-                            os.remove(TOKENS_FILE)
+                        if os.path.exists(state.TOKENS_FILE):
+                            os.remove(state.TOKENS_FILE)
                     except Exception:
                         pass
             except Exception as e:
                 log_message("WARNING", f"Error reading tokens.json: {e}")
                 try:
-                    if os.path.exists(TOKENS_FILE):
-                        os.remove(TOKENS_FILE)
+                    if os.path.exists(state.TOKENS_FILE):
+                        os.remove(state.TOKENS_FILE)
                 except Exception:
                     pass
                 
@@ -606,7 +657,7 @@ class UnifiedBrokerClient:
                     "refreshToken": data['data']['refreshToken'],
                     "feedToken": data['data'].get('feedToken') or obj.getfeedToken()
                 }
-                with open(TOKENS_FILE, "w") as f:
+                with open(state.TOKENS_FILE, "w") as f:
                     json.dump(tokens, f, indent=4)
                     
                 raw_jwt = tokens["jwtToken"].replace("Bearer ", "")
@@ -2053,7 +2104,7 @@ class UnifiedBrokerClient:
 
 
 # Global Broker Wrapper Instantiation
-unified_broker = UnifiedBrokerClient()
+state.unified_broker = UnifiedBrokerClient()
 
 # ==========================================
 # 4. UTILITIES & EXPIRY NORMALIZER
@@ -2375,19 +2426,19 @@ def get_aggregated_chart_data(strategy_id, timeframe):
 
 def save_strategies_to_disk():
     try:
-        with open(STRATEGIES_FILE, "w") as f:
-            json.dump(active_strategies, f, indent=4)
+        with open(state.STRATEGIES_FILE, "w") as f:
+            json.dump(state.active_strategies, f, indent=4)
     except Exception as e:
         print(f"[ERROR] Failed to save strategies to file: {e}")
 
 def load_strategies_from_disk():
-    global active_strategies
-    if os.path.exists(STRATEGIES_FILE):
+    pass # global replaced
+    if os.path.exists(state.STRATEGIES_FILE):
         try:
-            with open(STRATEGIES_FILE, "r") as f:
-                active_strategies = json.load(f)
+            with open(state.STRATEGIES_FILE, "r") as f:
+                state.active_strategies = json.load(f)
             # Ensure strategy_type and position tracking fields are present on loaded strategies
-            for strat in active_strategies.values():
+            for strat in state.active_strategies.values():
                 if "strategy_type" not in strat:
                     strat["strategy_type"] = "SPREAD"
                 if "position" not in strat:
@@ -2398,20 +2449,20 @@ def load_strategies_from_disk():
                     strat["required_margin"] = None
                 if "pnl" not in strat:
                     strat["pnl"] = 0.0
-            log_message("SUCCESS", f"Loaded {len(active_strategies)} strategies from '{STRATEGIES_FILE}'")
+            log_message("SUCCESS", f"Loaded {len(state.active_strategies)} strategies from '{state.STRATEGIES_FILE}'")
         except Exception as e:
-            log_message("ERROR", f"Failed to load '{STRATEGIES_FILE}': {e}. Starting fresh.")
-            active_strategies = {}
+            log_message("ERROR", f"Failed to load '{state.STRATEGIES_FILE}': {e}. Starting fresh.")
+            state.active_strategies = {}
     else:
-        active_strategies = {}
+        state.active_strategies = {}
 
 def seed_sample_strategies():
     """
     Seeds a couple of demo strategies dynamically using currently valid expiries so the user
     sees pricing active out-of-the-box.
     """
-    global active_strategies
-    if active_strategies:
+    pass # global replaced
+    if state.active_strategies:
         return
         
     log_message("INFO", "Seeding template multi-leg strategies...")
@@ -2424,7 +2475,7 @@ def seed_sample_strategies():
     leg2 = lookup_engine.lookup("DLF", norm_nfo, 820, "CE")
     
     if leg1 and leg2:
-        active_strategies["1001"] = {
+        state.active_strategies["1001"] = {
             "symbol": "DLF",
             "expiry": nfo_expiry,
             "strategy_type": "SPREAD",
@@ -2478,7 +2529,7 @@ def seed_sample_strategies():
     mleg2 = lookup_engine.lookup("GOLD", norm_mcx, 73000, "CE")
     
     if mleg1 and mleg2:
-        active_strategies["1002"] = {
+        state.active_strategies["1002"] = {
             "symbol": "GOLD",
             "expiry": mcx_expiry,
             "strategy_type": "SPREAD",
@@ -2559,35 +2610,50 @@ def calculate_depth_price(depth_list, target_qty, fallback_price):
 # ==========================================
 # 7. TRADING ENGINE BACKGROUND LOOP
 # ==========================================
+
 def run_trading_engine_thread():
-    global unified_broker, engine_running
-    
-    log_message("INFO", "Starting SaaS Trade Hub trading loop background process...")
-    
-    # Hot-load config at startup if present
-    config = load_client_config()
-    if config:
-        unified_broker.connect(config)
-    
+    log_message("INFO", "Starting Multi-Tenant Trade Hub trading loop background process...")
     while True:
         try:
+            if not state.engine_running:
+                time.sleep(1.0)
+                continue
+            # Iterate over all registered multi-tenant sessions
+            active_sessions = list(state.sessions.keys())
+            if not active_sessions:
+                time.sleep(1.0)
+                continue
+                
+            for cc in active_sessions:
+                client_ctx.set(cc)
+                process_trading_tick()
+            time.sleep(0.5)
+        except Exception as e:
+            log_message("ERROR", f"Engine loop error: {e}")
+            time.sleep(1.0)
+
+def process_trading_tick():
+    
+    
+    if True:
+        try:
             # 1. Self-healing token check and verification
-            if not unified_broker.connected:
+            if not state.unified_broker.connected:
                 config = load_client_config()
                 if config:
                     creds = config.get("credentials", {})
-                    if creds.get("totp_seed") or os.path.exists(TOKENS_FILE):
+                    if creds.get("totp_seed") or os.path.exists(state.TOKENS_FILE):
                         log_message("WARNING", "Reconnecting session to active Broker API...")
-                        unified_broker.connect(config)
-                if not unified_broker.connected:
+                        state.unified_broker.connect(config)
+                if not state.unified_broker.connected:
                     time.sleep(10.0)
-                    continue
+                    return
                     
             # 2. Gather active tokens
             tokens_to_fetch = {} # Mapping token -> exch_seg
             
             with state_lock:
-                for strat in active_strategies.values():
+                for strat in state.active_strategies.values():
                     for leg in strat["legs"]:
                         if leg.get("token"): # ONLY fetch if token is resolved
                             tokens_to_fetch[leg["token"]] = leg.get("exch_seg", "NFO")
@@ -2606,7 +2672,7 @@ def run_trading_engine_thread():
                     for exch, tokens in by_exchange.items():
                         for i in range(0, len(tokens), chunk_size):
                             chunk = tokens[i:i+chunk_size]
-                            chunk_data = unified_broker.get_market_data({exch: chunk})
+                            chunk_data = state.unified_broker.get_market_data({exch: chunk})
                             market_data.update(chunk_data)
                             time.sleep(0.4)  # Robust cooldown between rapid chunk requests to prevent rate limits!
                 except Exception as e:
@@ -2621,14 +2687,14 @@ def run_trading_engine_thread():
                         log_message("WARNING", f"Feed API Exception: {e}. Authenticating a fresh token...")
                         config = load_client_config()
                         if config:
-                            unified_broker.connect(config)
+                            state.unified_broker.connect(config)
                         time.sleep(2.0)
-                    continue
+                    return
             
             # 4. Perform Badla Spread Calculations & Evaluate Triggers
             ticks_to_save = []
             with state_lock:
-                for strat_id, strat in list(active_strategies.items()):
+                for strat_id, strat in list(state.active_strategies.items()):
                     legs = strat["legs"]
                     if not legs:
                         strat["buy_diff"] = None
@@ -2636,7 +2702,7 @@ def run_trading_engine_thread():
                         strat["est_cost"] = None
                         strat["cost_per_share"] = None
                         strat["status"] = "Configure leg strikes below."
-                        continue
+                        return
                         
                     unconfigured_legs = [leg for leg in legs if not leg.get("token")]
                     if unconfigured_legs:
@@ -2648,7 +2714,7 @@ def run_trading_engine_thread():
                         for leg in legs:
                             if not leg.get("token"):
                                 leg["status"] = leg.get("status") or "Strike not configured."
-                        continue
+                        return
                         
                     missing_tokens = [leg for leg in legs if leg.get("token") and leg["token"] not in market_data]
                     if missing_tokens:
@@ -2656,7 +2722,7 @@ def run_trading_engine_thread():
                         for leg in legs:
                             if leg.get("token") and leg["token"] not in market_data:
                                 leg["status"] = "Waiting for live quotes..."
-                        continue
+                        return
                         
                     # 1. Update quotes and VWAP for all legs
                     for leg in legs:
@@ -2750,7 +2816,7 @@ def run_trading_engine_thread():
 
                     # Calculate required margin for this strategy
                     try:
-                        strat["required_margin"] = unified_broker.calculate_strategy_margin(legs, strategy_mult)
+                        strat["required_margin"] = state.unified_broker.calculate_strategy_margin(legs, strategy_mult)
                     except Exception as e:
                         log_message("WARNING", f"Error calculating margin: {e}")
                         strat["required_margin"] = None
@@ -2780,9 +2846,9 @@ def run_trading_engine_thread():
                         ticks_to_save.append((strat_id, int(time.time()), strat["buy_diff"], strat["sell_diff"]))
                     
                     # 5. Check order triggers
-                    if not engine_running:
+                    if not state.engine_running:
                         strat["status"] = "[ENGINE STOPPED] Trade engine is paused."
-                        continue
+                        return
                         
                     trade_action = strat.get("trade_action", "")
                     execute_trigger = strat.get("execute_trigger", "")
@@ -2795,13 +2861,13 @@ def run_trading_engine_thread():
                         if execute_trigger != "GO":
                             strat["status"] = "[CONFIRM REQUIRED] Click GO to trigger BUY."
                         else:
-                            execute_strategy_trade(unified_broker, strat, "BUY")
+                            execute_strategy_trade(state.unified_broker, strat, "BUY")
                             
                     elif trade_action == "SELL NOW":
                         if execute_trigger != "GO":
                             strat["status"] = "[CONFIRM REQUIRED] Click GO to trigger SELL."
                         else:
-                            execute_strategy_trade(unified_broker, strat, "SELL")
+                            execute_strategy_trade(state.unified_broker, strat, "SELL")
                             
                     elif trade_action == "SET TARGET BUY":
                         if target_buy is None:
@@ -2812,7 +2878,7 @@ def run_trading_engine_thread():
                             else:
                                 if rounded_buy <= target_buy:
                                     log_message("SUCCESS", f"[TRIGGER] {strat['symbol']} Buy Diff {rounded_buy} <= Target {target_buy}!")
-                                    execute_strategy_trade(unified_broker, strat, "BUY")
+                                    execute_strategy_trade(state.unified_broker, strat, "BUY")
                                 else:
                                     strat["status"] = f"[ACTIVE] Target Buy: {target_buy} | Current Buy: {rounded_buy} | Waiting..."
                                     
@@ -2825,7 +2891,7 @@ def run_trading_engine_thread():
                             else:
                                 if rounded_sell >= target_sell:
                                     log_message("SUCCESS", f"[TRIGGER] {strat['symbol']} Sell Diff {rounded_sell} >= Target {target_sell}!")
-                                    execute_strategy_trade(unified_broker, strat, "SELL")
+                                    execute_strategy_trade(state.unified_broker, strat, "SELL")
                                 else:
                                     strat["status"] = f"[ACTIVE] Target Sell: {target_sell} | Current Sell: {rounded_sell} | Waiting..."
                                     
@@ -2895,12 +2961,18 @@ def verify_user(username, password):
 # 8. FLASK SERVER ENDPOINTS
 # ==========================================
 app = Flask(__name__, template_folder='templates')
+
+@app.before_request
+def set_tenant_context():
+    cc = request.headers.get('X-Client-Code', 'DEFAULT')
+    client_ctx.set(cc)
+
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "trade_hub_pro_secret_key_998877")
 
 _engine_initialized = False
 
 def init_app_engine():
-    global lookup_engine, unified_broker, _engine_initialized
+    global _engine_initialized, lookup_engine
     if _engine_initialized:
         return
     _engine_initialized = True
@@ -2909,10 +2981,10 @@ def init_app_engine():
     print("="*70 + "\n")
     log_message("INFO", "Initializing Trade Hub Pro Engine components...")
     init_db()
-    unified_broker = UnifiedBrokerClient()
+    state.unified_broker = UnifiedBrokerClient()
     lookup_engine = ScripMasterLookup("OpenAPIScripMaster.json")
     load_strategies_from_disk()
-    if not active_strategies:
+    if not state.active_strategies:
         seed_sample_strategies()
     trading_thread = threading.Thread(target=run_trading_engine_thread, daemon=True)
     trading_thread.start()
@@ -2949,31 +3021,31 @@ temp_otp_cache = {}
 
 
 def logout_helper():
-    global unified_broker, engine_running
-    engine_running = False
+    pass # global replaced
+    state.engine_running = False
     log_message("WARNING", "Clearing SaaS broker credentials...")
     
-    if os.path.exists(CLIENT_CONFIG_FILE):
+    if os.path.exists(state.CLIENT_CONFIG_FILE):
         try:
-            os.remove(CLIENT_CONFIG_FILE)
+            os.remove(state.CLIENT_CONFIG_FILE)
         except Exception:
             pass
             
-    if os.path.exists(TOKENS_FILE):
+    if os.path.exists(state.TOKENS_FILE):
         try:
-            os.remove(TOKENS_FILE)
+            os.remove(state.TOKENS_FILE)
         except Exception:
             pass
             
     # Clean disconnect broker connection (closes WebSockets, clears caches)
-    unified_broker.disconnect()
+    state.unified_broker.disconnect()
 
 def panic_stop_helper():
-    global active_strategies, engine_running
-    engine_running = False
+    pass # global replaced
+    state.engine_running = False
     log_message("CRITICAL", "[EMERGENCY STOP] All strategies have been cancelled and triggers deactivated!")
     with state_lock:
-        for strat in active_strategies.values():
+        for strat in state.active_strategies.values():
             strat["target_buy"] = None
             strat["target_sell"] = None
             strat["trade_action"] = ""
@@ -2985,11 +3057,11 @@ def panic_stop_helper():
 
 @app.route('/api/auth/status', methods=['GET'])
 def auth_status():
-    has_config = os.path.exists(CLIENT_CONFIG_FILE)
+    has_config = os.path.exists(state.CLIENT_CONFIG_FILE)
     return jsonify({
         "registered": has_config,
-        "connected": unified_broker.connected,
-        "profile": unified_broker.profile
+        "connected": state.unified_broker.connected,
+        "profile": state.unified_broker.profile
     })
 
 @app.route('/api/auth/register', methods=['POST'])
@@ -3048,8 +3120,8 @@ def auth_register():
                         "selected_broker": "ANGEL_ONE",
                         "credentials": creds
                     }
-                    success = unified_broker.connect(temp_cache)
-                    if success and unified_broker.connected:
+                    success = state.unified_broker.connect(temp_cache)
+                    if success and state.unified_broker.connected:
                         config_data = {
                             "client_name": name,
                             "client_email": email,
@@ -3067,7 +3139,7 @@ def auth_register():
                             "message": "Successfully connected to Angel One automatically using your TOTP key!"
                         })
                     else:
-                        err_detail = unified_broker.profile.get("error_details", "Auto-connection failed.")
+                        err_detail = state.unified_broker.profile.get("error_details", "Auto-connection failed.")
                         log_message("WARNING", f"Angel One auto-connection with TOTP seed failed: {err_detail}. Proceeding to manual 2FA card.")
                         step4_hint = f"Angel One auto-login failed: {err_detail}. Please enter your 6-digit Authenticator TOTP manually below."
                 except Exception as e:
@@ -3081,7 +3153,7 @@ def auth_register():
                 log_message("INFO", f"Fyers TOTP Key provided. Attempting automatic login for {client_code}...")
                 try:
                     # 1. Trigger the OTP request to get a request_key
-                    r = unified_broker._fyers_post_request(
+                    r = state.unified_broker._fyers_post_request(
                         "/vagator/v2/send_login_otp",
                         json_payload={"fy_id": client_code, "app_id": "2"},
                         timeout=10
@@ -3105,8 +3177,8 @@ def auth_register():
                     }
                     
                     # 4. Call connect() which will automatically generate TOTP, verify MPIN, and exchange token!
-                    success = unified_broker.connect(temp_cache)
-                    if success and unified_broker.connected:
+                    success = state.unified_broker.connect(temp_cache)
+                    if success and state.unified_broker.connected:
                         config_data = {
                             "client_name": name,
                             "client_email": email,
@@ -3124,7 +3196,7 @@ def auth_register():
                             "message": "Successfully connected to FYERS automatically using your TOTP key!"
                         })
                     else:
-                        err_detail = unified_broker.profile.get("error_details", "Auto-connection failed.")
+                        err_detail = state.unified_broker.profile.get("error_details", "Auto-connection failed.")
                         log_message("WARNING", f"Fyers auto-connection with TOTP seed failed: {err_detail}. Falling back to manual OTP card.")
                         step4_hint = f"Fyers auto-login failed: {err_detail}. Please enter your 6-digit SMS OTP or current Authenticator TOTP manually below."
                 except Exception as e:
@@ -3134,7 +3206,7 @@ def auth_register():
             # Normal Fyers login flow without totp_seed (prompts for Step 4 OTP)
             try:
                 log_message("INFO", f"Fyers Step 1: Sending login OTP to {client_code}...")
-                r = unified_broker._fyers_post_request(
+                r = state.unified_broker._fyers_post_request(
                     "/vagator/v2/send_login_otp",
                     json_payload={"fy_id": client_code, "app_id": "2"},
                     timeout=10
@@ -3200,10 +3272,10 @@ def auth_verify_otp():
     log_message("INFO", f"Step 4: Attempting real {broker_name} authentication...")
 
     # Attempt REAL broker authentication - no bypass, no fallback
-    success = unified_broker.connect(temp_otp_cache)
+    success = state.unified_broker.connect(temp_otp_cache)
 
     if not success:
-        err_detail = unified_broker.profile.get("error_details",
+        err_detail = state.unified_broker.profile.get("error_details",
             "Authentication failed. Please verify all your credentials and try again.")
         log_message("ERROR", f"{broker_name} authentication failed: {err_detail}")
         return jsonify({
@@ -3212,7 +3284,7 @@ def auth_verify_otp():
         }), 401
 
     # Save only if truly connected
-    if not unified_broker.connected:
+    if not state.unified_broker.connected:
         return jsonify({"status": "error", "message": "Broker reported success but connection state is invalid. Please retry."}), 500
 
     config_data = {
@@ -3241,7 +3313,7 @@ def auth_logout():
 def get_state():
     # Fetch funds outside the state lock to prevent blocking/lock contention.
     # Positions and orders fetching disabled to prevent hanging/performance issues.
-    funds = unified_broker.get_funds()
+    funds = state.unified_broker.get_funds()
     
     n_ltp, n_chg, n_pct = get_nifty_live_price()
     
@@ -3263,18 +3335,18 @@ def get_state():
             
     with state_lock:
         state = {
-            "profile_name": unified_broker.profile["name"],
-            "client_code": unified_broker.profile["client_code"],
-            "broker": unified_broker.profile["broker"],
-            "connected": unified_broker.connected,
-            "mode": unified_broker.mode,
-            "strategies": active_strategies,
-            "logs": app_logs,
+            "profile_name": state.unified_broker.profile["name"],
+            "client_code": state.unified_broker.profile["client_code"],
+            "broker": state.unified_broker.profile["broker"],
+            "connected": state.unified_broker.connected,
+            "mode": state.unified_broker.mode,
+            "strategies": state.active_strategies,
+            "logs": state.app_logs,
             "nfo_expiries": lookup_engine.sorted_nfo_expiries if lookup_engine else [],
             "mcx_expiries": lookup_engine.sorted_mcx_expiries if lookup_engine else [],
             "nfo_symbols": lookup_engine.nfo_symbols if lookup_engine else [],
             "mcx_symbols": lookup_engine.mcx_symbols if lookup_engine else [],
-            "engine_running": engine_running,
+            "state.engine_running": state.engine_running,
             "funds": funds,
             "positions": [],
             "orders": [],
@@ -3289,17 +3361,17 @@ def get_state():
 
 @app.route('/api/engine/start', methods=['POST'])
 def start_engine():
-    global engine_running
+    pass # global replaced
     with state_lock:
-        engine_running = True
+        state.engine_running = True
     log_message("SUCCESS", "Trading Engine STARTED. Live monitoring and execution is active.")
     return jsonify({"status": "success"})
 
 @app.route('/api/engine/stop', methods=['POST'])
 def stop_engine():
-    global engine_running
+    pass # global replaced
     with state_lock:
-        engine_running = False
+        state.engine_running = False
     log_message("WARNING", "Trading Engine STOPPED.")
     return jsonify({"status": "success"})
 
@@ -3310,7 +3382,7 @@ def panic_stop():
 
 @app.route('/api/strategy/add', methods=['POST'])
 def add_strategy():
-    global active_strategies
+    pass # global replaced
     req = request.json
     
     symbol = req.get("symbol", "").upper().strip()
@@ -3459,8 +3531,8 @@ def add_strategy():
         
     # Generate unique header ID
     with state_lock:
-        new_id = str(max([int(k) for k in active_strategies.keys()] + [1000]) + 1)
-        active_strategies[new_id] = {
+        new_id = str(max([int(k) for k in state.active_strategies.keys()] + [1000]) + 1)
+        state.active_strategies[new_id] = {
             "symbol": symbol,
             "expiry": expiry,
             "strategy_type": strategy_type,
@@ -3487,7 +3559,7 @@ def add_strategy():
 
 @app.route('/api/strategy/update', methods=['POST'])
 def update_strategy():
-    global active_strategies
+    pass # global replaced
     req = request.json
     
     h_row = str(req.get("header_row"))
@@ -3495,10 +3567,10 @@ def update_strategy():
     value = req.get("value")
     
     with state_lock:
-        if h_row not in active_strategies:
+        if h_row not in state.active_strategies:
             return jsonify({"status": "error", "message": "Strategy ID not found"}), 404
             
-        strat = active_strategies[h_row]
+        strat = state.active_strategies[h_row]
         
         if field == "target_buy":
             strat["target_buy"] = float(value) if (value is not None and str(value).strip() != "") else None
@@ -3517,7 +3589,7 @@ def update_strategy():
 
 @app.route('/api/strategy/leg/update', methods=['POST'])
 def update_leg():
-    global active_strategies
+    pass # global replaced
     req = request.json
     
     h_row = str(req.get("header_row"))
@@ -3526,10 +3598,10 @@ def update_leg():
     value = req.get("value")
     
     with state_lock:
-        if h_row not in active_strategies:
+        if h_row not in state.active_strategies:
             return jsonify({"status": "error", "message": "Strategy ID not found"}), 404
             
-        strat = active_strategies[h_row]
+        strat = state.active_strategies[h_row]
         if leg_idx < 0 or leg_idx >= len(strat["legs"]):
             return jsonify({"status": "error", "message": "Leg index out of range"}), 400
             
@@ -3617,16 +3689,16 @@ def update_leg():
 
 @app.route('/api/strategy/leg/add', methods=['POST'])
 def add_leg():
-    global active_strategies
+    pass # global replaced
     req = request.json
     
     h_row = str(req.get("header_row"))
     
     with state_lock:
-        if h_row not in active_strategies:
+        if h_row not in state.active_strategies:
             return jsonify({"status": "error", "message": "Strategy ID not found"}), 404
             
-        strat = active_strategies[h_row]
+        strat = state.active_strategies[h_row]
         exch_seg = "NFO"
         if strat["legs"]:
             exch_seg = strat["legs"][0].get("exch_seg", "NFO")
@@ -3649,17 +3721,17 @@ def add_leg():
 
 @app.route('/api/strategy/leg/delete', methods=['POST'])
 def delete_leg():
-    global active_strategies
+    pass # global replaced
     req = request.json
     
     h_row = str(req.get("header_row"))
     leg_idx = int(req.get("leg_index"))
     
     with state_lock:
-        if h_row not in active_strategies:
+        if h_row not in state.active_strategies:
             return jsonify({"status": "error", "message": "Strategy ID not found"}), 404
             
-        strat = active_strategies[h_row]
+        strat = state.active_strategies[h_row]
         if leg_idx < 0 or leg_idx >= len(strat["legs"]):
             return jsonify({"status": "error", "message": "Leg index out of range"}), 400
             
@@ -3670,14 +3742,14 @@ def delete_leg():
 
 @app.route('/api/strategy/delete', methods=['POST'])
 def delete_strategy():
-    global active_strategies
+    pass # global replaced
     req = request.json
     h_row = str(req.get("header_row"))
     
     with state_lock:
-        if h_row in active_strategies:
-            symbol = active_strategies[h_row]["symbol"]
-            del active_strategies[h_row]
+        if h_row in state.active_strategies:
+            symbol = state.active_strategies[h_row]["symbol"]
+            del state.active_strategies[h_row]
             save_strategies_to_disk()
             log_message("SUCCESS", f"Deleted Strategy ID: {h_row} ({symbol})")
             
@@ -3754,13 +3826,13 @@ def get_strategy_chart_data_api():
         return jsonify({"status": "error", "message": "Missing strategy id"}), 400
         
     with state_lock:
-        if strategy_id not in active_strategies:
+        if strategy_id not in state.active_strategies:
             return jsonify({"status": "error", "message": "Strategy not found"}), 404
-        strat = active_strategies[strategy_id]
+        strat = state.active_strategies[strategy_id]
         legs = list(strat.get("legs", []))
         
     # Check if we can fetch from the broker
-    if unified_broker.connected and legs and all(leg.get("token") for leg in legs):
+    if state.unified_broker.connected and legs and all(leg.get("token") for leg in legs):
         try:
             from datetime import timedelta
             now = datetime.now()
@@ -3792,7 +3864,7 @@ def get_strategy_chart_data_api():
                 sign = 1.0 if action == "BUY" else -1.0
                 
                 # Fetch leg candles from broker
-                candles = unified_broker.get_historical_candles(exch_seg, token, symbol, broker_timeframe, from_date, to_date)
+                candles = state.unified_broker.get_historical_candles(exch_seg, token, symbol, broker_timeframe, from_date, to_date)
                 if not candles:
                     # If any leg has no history, raise to fall back to SQLite
                     raise Exception(f"No historical candles returned for leg {symbol}")
@@ -3903,20 +3975,20 @@ def get_strategy_chart_data_api():
 
 @app.route('/api/strategy/position/detect', methods=['POST'])
 def detect_strategy_position():
-    global active_strategies
+    pass # global replaced
     req = request.json
     h_row = str(req.get("header_row"))
     
     with state_lock:
-        if h_row not in active_strategies:
+        if h_row not in state.active_strategies:
             return jsonify({"status": "error", "message": "Strategy ID not found"}), 404
             
-        strat = active_strategies[h_row]
-        if not unified_broker.connected:
+        strat = state.active_strategies[h_row]
+        if not state.unified_broker.connected:
             return jsonify({"status": "error", "message": "Broker not connected"}), 400
             
         try:
-            broker_positions = unified_broker.get_positions()
+            broker_positions = state.unified_broker.get_positions()
             if not broker_positions:
                 return jsonify({"status": "success", "position": 0.0, "avg_entry_diff": None, "message": "No active positions found in broker account."})
                 
@@ -3924,20 +3996,20 @@ def detect_strategy_position():
             for p in broker_positions:
                 qty = 0.0
                 avg_price = 0.0
-                if unified_broker.broker == "ANGEL_ONE":
+                if state.unified_broker.broker == "ANGEL_ONE":
                     qty = safe_float(p.get("netqty"))
                     avg_price = safe_float(p.get("netprice") or p.get("avgprice"))
-                elif unified_broker.broker == "ZERODHA":
+                elif state.unified_broker.broker == "ZERODHA":
                     qty = safe_float(p.get("quantity"))
                     avg_price = safe_float(p.get("average_price"))
-                elif unified_broker.broker == "FYERS":
+                elif state.unified_broker.broker == "FYERS":
                     qty = safe_float(p.get("netQty"))
                     avg_price = safe_float(p.get("avgPrice"))
                     
                 if abs(qty) < 0.01:
                     continue
                     
-                contract = lookup_engine.find_contract_by_position(p, unified_broker.broker)
+                contract = lookup_engine.find_contract_by_position(p, state.unified_broker.broker)
                 if contract:
                     c_name = contract.get("name", "").upper()
                     c_expiry = contract.get("expiry", "")
@@ -4046,7 +4118,7 @@ def detect_strategy_position():
 
 @app.route('/api/strategy/position/update', methods=['POST'])
 def update_strategy_position_api():
-    global active_strategies
+    pass # global replaced
     req = request.json
     h_row = str(req.get("header_row"))
     try:
@@ -4057,10 +4129,10 @@ def update_strategy_position_api():
         return jsonify({"status": "error", "message": "Invalid numeric values"}), 400
         
     with state_lock:
-        if h_row not in active_strategies:
+        if h_row not in state.active_strategies:
             return jsonify({"status": "error", "message": "Strategy ID not found"}), 404
             
-        strat = active_strategies[h_row]
+        strat = state.active_strategies[h_row]
         strat["position"] = round(position, 2)
         strat["avg_entry_diff"] = round(avg_entry_diff, 2) if avg_entry_diff is not None else None
         
@@ -4071,14 +4143,14 @@ def update_strategy_position_api():
 
 @app.route('/api/strategy/import-all', methods=['POST'])
 def import_all_strategies_from_broker():
-    global active_strategies
-    if not unified_broker.connected:
+    pass # global replaced
+    if not state.unified_broker.connected:
         return jsonify({"status": "error", "message": "Broker not connected"}), 400
         
     try:
         with state_lock:
             load_strategies_from_disk()
-        broker_positions = unified_broker.get_positions()
+        broker_positions = state.unified_broker.get_positions()
         if not broker_positions:
             return jsonify({"status": "success", "imported_count": 0, "message": "No active positions found in broker account."})
             
@@ -4087,20 +4159,20 @@ def import_all_strategies_from_broker():
         for p in broker_positions:
             qty = 0.0
             avg_price = 0.0
-            if unified_broker.broker == "ANGEL_ONE":
+            if state.unified_broker.broker == "ANGEL_ONE":
                 qty = safe_float(p.get("netqty"))
                 avg_price = safe_float(p.get("netprice") or p.get("avgprice"))
-            elif unified_broker.broker == "ZERODHA":
+            elif state.unified_broker.broker == "ZERODHA":
                 qty = safe_float(p.get("quantity"))
                 avg_price = safe_float(p.get("average_price"))
-            elif unified_broker.broker == "FYERS":
+            elif state.unified_broker.broker == "FYERS":
                 qty = safe_float(p.get("netQty"))
                 avg_price = safe_float(p.get("avgPrice"))
                 
             if abs(qty) < 0.01:
                 continue
                 
-            contract = lookup_engine.find_contract_by_position(p, unified_broker.broker)
+            contract = lookup_engine.find_contract_by_position(p, state.unified_broker.broker)
             if contract:
                 underlying = contract.get("name", "").upper()
                 
@@ -4187,14 +4259,14 @@ def import_all_strategies_from_broker():
                 
                 # Check for existing strategy match (matching only by symbol/underlying)
                 matched_strat_id = None
-                for strat_id, strat in active_strategies.items():
+                for strat_id, strat in state.active_strategies.items():
                     if strat.get("symbol", "").upper() == underlying:
                         matched_strat_id = strat_id
                         break
                         
                 if matched_strat_id:
                     # Update existing strategy
-                    strat = active_strategies[matched_strat_id]
+                    strat = state.active_strategies[matched_strat_id]
                     strat["legs"] = new_legs
                     strat["position"] = detected_pos
                     strat["avg_entry_diff"] = detected_avg
@@ -4202,8 +4274,8 @@ def import_all_strategies_from_broker():
                     strat["status"] = "Imported/Synced from broker."
                 else:
                     # Create new strategy
-                    new_id = str(max([int(k) for k in active_strategies.keys()] + [1000]) + 1)
-                    active_strategies[new_id] = {
+                    new_id = str(max([int(k) for k in state.active_strategies.keys()] + [1000]) + 1)
+                    state.active_strategies[new_id] = {
                         "symbol": underlying,
                         "expiry": display_expiry,
                         "strategy_type": "SPREAD",
@@ -4238,9 +4310,9 @@ def import_all_strategies_from_broker():
 
 @app.route('/api/logs/clear', methods=['POST'])
 def clear_logs():
-    global app_logs
+    pass # global replaced
     with state_lock:
-        app_logs = []
+        state.app_logs = []
     return jsonify({"status": "success"})
 
 # ==========================================
@@ -4258,8 +4330,8 @@ def chat_api():
         
         # Read strategy status details for extra context
         with state_lock:
-            num_strategies = len(active_strategies)
-            strat_symbols = [strat["symbol"] for strat in active_strategies.values()]
+            num_strategies = len(state.active_strategies)
+            strat_symbols = [strat["symbol"] for strat in state.active_strategies.values()]
         
         # Detailed system prompt describing the Trade Hub app, options, and business guide
         system_context = (

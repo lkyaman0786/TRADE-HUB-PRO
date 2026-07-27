@@ -88,6 +88,17 @@ if tunnel_url:
     except Exception:
         copied_msg = "Please copy the URL manually below."
 
+    print("\n[3/3] Auto-publishing Tunnel URL to GitHub for seamless web access...")
+    try:
+        with open(os.path.join(base_dir, "backend_url.txt"), "w") as f:
+            f.write(tunnel_url)
+        subprocess.run(["git", "add", "backend_url.txt"], cwd=base_dir, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["git", "commit", "-m", "Auto-update backend tunnel URL"], cwd=base_dir, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["git", "push", "origin", "main"], cwd=base_dir, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(" [SUCCESS] Tunnel URL successfully published to GitHub!")
+    except Exception as e:
+        print(f" [WARNING] Failed to auto-publish URL to GitHub: {e}")
+
     print("\n" + "=" * 75)
     print("                    SUCCESS! ONLINE TUNNEL IS ACTIVE")
     print("=" * 75)
