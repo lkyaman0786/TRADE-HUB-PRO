@@ -430,7 +430,22 @@
                         Welcome to Trade Hub Pro, an institutional-grade option spread monitoring and execution utility. Register your details to connect broker endpoints.
                     </p>
                 </div>
-                <div class="mt-8 space-y-4">
+                
+                    <!-- Online Server Connector Banner -->
+                    <div class="mt-4 p-3 bg-primary/10 border border-primary/30 rounded-lg flex flex-col gap-2">
+                        <div class="flex items-center gap-2 text-primary">
+                            <span class="material-symbols-outlined text-lg">dns</span>
+                            <span class="font-display font-bold text-xs uppercase tracking-wider text-on-surface">Online Server Connector</span>
+                        </div>
+                        <p class="text-[10px] text-on-surface-variant leading-normal">
+                            Accessing online at <code class="text-primary font-mono font-bold">tradehub.nhtrade.in</code>? Connect your live Python engine tunnel below:
+                        </p>
+                        <button type="button" onclick="toggleBackendConfigModal(true)" class="w-full py-1.5 bg-primary hover:bg-primary/90 text-white font-bold text-[10px] rounded uppercase tracking-wider shadow transition-all cursor-pointer">
+                            Connect Server / Tunnel
+                        </button>
+                    </div>
+
+                    <div class="mt-8 space-y-4">
                     <div class="flex items-center gap-3 text-secondary">
                         <span class="material-symbols-outlined text-lg">verified_user</span>
                         <span class="font-display font-semibold tracking-wide text-[10px] uppercase">AES-256 Key Encryption Active</span>
@@ -1864,6 +1879,10 @@
         setInterval(checkAuthStatus, 5000);
         checkAuthStatus();
         fetchAppState();
+                if (!localStorage.getItem('th_backend_url') && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+                    setTimeout(() => toggleBackendConfigModal(true), 500);
+                }
+
         initPolling();
 
         // Switch tab segment NFO/MCX
@@ -3996,6 +4015,12 @@
         }
 
         async function submitBrokerRegistration() {
+            // Guard against HTTP 405 on static web hosts (GitHub Pages tradehub.nhtrade.in)
+            if (!getBackendBaseUrl() && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+                alert("Please click 'Connect Server / Tunnel' first and paste your Cloudflare Tunnel URL (from Start_Online_Server.bat) so credentials can be sent to your live Python engine.");
+                toggleBackendConfigModal(true);
+                return;
+            }
             const name = document.getElementById('auth-client-name').value.trim();
             const email = document.getElementById('auth-client-email').value.trim();
             const mobile = document.getElementById('auth-client-mobile').value.trim();
@@ -4081,6 +4106,11 @@
         }
 
         async function submitOTPVerification() {
+            if (!getBackendBaseUrl() && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+                alert("Please click 'Connect Server / Tunnel' first and paste your Cloudflare Tunnel URL (from Start_Online_Server.bat).");
+                toggleBackendConfigModal(true);
+                return;
+            }
             const otpVal = document.getElementById('auth-otp-input').value.trim();
             if (!otpVal) {
                 alert('Please enter your 6-digit OTP/TOTP code.');
