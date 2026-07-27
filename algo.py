@@ -109,11 +109,34 @@ class MultiTenantState:
         if cc is None:
             cc = client_ctx.get()
         if cc not in self.sessions:
+            broker_client = UnifiedBrokerClient()
             self.sessions[cc] = {
                 'state.active_strategies': {},
                 'state.app_logs': [],
-                'state.unified_broker': None
+                'state.unified_broker': broker_client
             }
+            # Auto-load saved strategies for this tenant
+            target_strat = f"strategies_{cc}.json" if cc != 'DEFAULT' else "strategies.json"
+            if not os.path.exists(target_strat) and os.path.exists("strategies.json"):
+                target_strat = "strategies.json"
+            if os.path.exists(target_strat):
+                try:
+                    with open(target_strat, "r") as f:
+                        self.sessions[cc]['state.active_strategies'] = json.load(f)
+                except Exception as e:
+                    print(f"[ERROR] Failed loading strategies for tenant {cc}: {e}")
+                    
+            # Auto-connect broker from saved config for this tenant
+            target_cfg = f"client_config_{cc}.json" if cc != 'DEFAULT' else "client_config.json"
+            if not os.path.exists(target_cfg) and os.path.exists("client_config.json"):
+                target_cfg = "client_config.json"
+            if os.path.exists(target_cfg):
+                try:
+                    with open(target_cfg, "r") as f:
+                        cfg_data = json.load(f)
+                    broker_client.connect(cfg_data)
+                except Exception as e:
+                    print(f"[ERROR] Failed auto-connecting broker for tenant {cc}: {e}")
         return self.sessions[cc]
 
     @property
@@ -2999,14 +3022,14 @@ def handle_preflight():
     if request.method == "OPTIONS":
         res = app.make_default_options_response()
         res.headers['Access-Control-Allow-Origin'] = '*'
-        res.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        res.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Client-Code'
         res.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
         return res, 200
 
 @app.after_request
 def add_cors_headers(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Client-Code'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     return response
 
@@ -3334,7 +3357,7 @@ def get_state():
             pass
             
     with state_lock:
-        state = {
+        state_dict = {
             "profile_name": state.unified_broker.profile["name"],
             "client_code": state.unified_broker.profile["client_code"],
             "broker": state.unified_broker.profile["broker"],
@@ -3346,7 +3369,7 @@ def get_state():
             "mcx_expiries": lookup_engine.sorted_mcx_expiries if lookup_engine else [],
             "nfo_symbols": lookup_engine.nfo_symbols if lookup_engine else [],
             "mcx_symbols": lookup_engine.mcx_symbols if lookup_engine else [],
-            "state.engine_running": state.engine_running,
+            "engine_running": state.engine_running,
             "funds": funds,
             "positions": [],
             "orders": [],
@@ -3357,7 +3380,7 @@ def get_state():
             "client_mobile": mobile,
             "registered_at": reg_at
         }
-    return jsonify(state)
+    return jsonify(state_dict)
 
 @app.route('/api/engine/start', methods=['POST'])
 def start_engine():

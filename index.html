@@ -1671,6 +1671,9 @@
         }
 
         function getBackendBaseUrl() {
+            if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+                return '';
+            }
             const saved = localStorage.getItem('th_backend_url');
             if (saved && saved.trim()) {
                 return saved.trim().replace(/\/+$/, '');
@@ -2629,7 +2632,7 @@
                 const data = await resStatus.json();
                 const path = data.engine_running ? '/api/engine/stop' : '/api/engine/start';
                 
-                const res = await fetch(path, { method: 'POST' });
+                const res = await apiFetch(path, { method: 'POST' });
                 if (res.ok) fetchAppState();
             } catch (err) {
                 console.error(err);
