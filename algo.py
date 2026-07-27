@@ -3108,6 +3108,10 @@ def auth_register():
         if not name or not email or not mobile:
             return jsonify({"status": "error", "message": "Name, Email, and Mobile are required."}), 400
 
+        tenant_cc = request.headers.get('X-Client-Code') or creds.get('client_code') or mobile
+        client_ctx.set(tenant_cc)
+        state.get_session(tenant_cc)
+
         broker_std = "ANGEL_ONE"
         if "ZERODHA" in broker:
             broker_std = "ZERODHA"

@@ -4096,6 +4096,11 @@
             btn.disabled = true;
             btn.innerText = 'Connecting Session...';
 
+            const clientCode = creds.client_code || mobile || name;
+            if (clientCode) {
+                localStorage.setItem('th_client_code', clientCode);
+            }
+
             try {
                 const res = await apiFetch('/api/auth/register', {
                     method: 'POST',
