@@ -4438,42 +4438,6 @@ def chat_api():
 # ==========================================
 # 9. MAIN RUNNER & AUTO-LAUNCHER
 # ==========================================
-def launch_web_browser(port):
-    """Waiting for Flask thread to initialize before launching the web browser."""
-    time.sleep(1.5)
-    log_message("INFO", f"Auto-launching local Trade Hub Dashboard in your browser on port {port}...")
-    webbrowser.open(f"http://127.0.0.1:{port}")
-
-def main():
-    init_app_engine()
-    
-    host = os.environ.get("HOST", "0.0.0.0")
-    port = int(os.environ.get("PORT", 5000))
-    is_cloud = bool(os.environ.get("PORT") or os.environ.get("RAILWAY_STATIC_URL") or os.environ.get("RENDER"))
-
-    # Start browser auto-launcher (only when running locally)
-    if not is_cloud:
-        launcher_thread = threading.Thread(target=launch_web_browser, args=(port,), daemon=True)
-        launcher_thread.start()
-    
-    # Initialize Flask server
-    log_message("INFO", f"Starting Flask application Web Server on {host}:{port}...")
-
-    try:
-        app.run(host=host, port=port, debug=False, use_reloader=False)
-    except OSError as e:
-        if "Address already in use" in str(e) or "10048" in str(e):
-            print("\n" + "="*80)
-            print(f" [CRITICAL] PORT {port} IS ALREADY IN USE BY ANOTHER PROCESS!")
-            print(" Please close any other running python or terminal windows of Trade Hub.")
-            print(" If the error persists, restart your computer or kill zombie python processes.")
-            print("="*80 + "\n")
-            log_message("CRITICAL", f"Port {port} in use. Flask crashed.")
-            sys.exit(1)
-        else:
-            raise e
-
-
 # ==========================================
 # ADMIN DASHBOARD ROUTES
 # ==========================================
@@ -4544,6 +4508,44 @@ def admin_data():
         })
         
     return jsonify(admin_state)
+
+
+
+def launch_web_browser(port):
+    """Waiting for Flask thread to initialize before launching the web browser."""
+    time.sleep(1.5)
+    log_message("INFO", f"Auto-launching local Trade Hub Dashboard in your browser on port {port}...")
+    webbrowser.open(f"http://127.0.0.1:{port}")
+
+def main():
+    init_app_engine()
+    
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", 5000))
+    is_cloud = bool(os.environ.get("PORT") or os.environ.get("RAILWAY_STATIC_URL") or os.environ.get("RENDER"))
+
+    # Start browser auto-launcher (only when running locally)
+    if not is_cloud:
+        launcher_thread = threading.Thread(target=launch_web_browser, args=(port,), daemon=True)
+        launcher_thread.start()
+    
+    # Initialize Flask server
+    log_message("INFO", f"Starting Flask application Web Server on {host}:{port}...")
+
+    try:
+        app.run(host=host, port=port, debug=False, use_reloader=False)
+    except OSError as e:
+        if "Address already in use" in str(e) or "10048" in str(e):
+            print("\n" + "="*80)
+            print(f" [CRITICAL] PORT {port} IS ALREADY IN USE BY ANOTHER PROCESS!")
+            print(" Please close any other running python or terminal windows of Trade Hub.")
+            print(" If the error persists, restart your computer or kill zombie python processes.")
+            print("="*80 + "\n")
+            log_message("CRITICAL", f"Port {port} in use. Flask crashed.")
+            sys.exit(1)
+        else:
+            raise e
+
 
 if __name__ == "__main__":
     main()
