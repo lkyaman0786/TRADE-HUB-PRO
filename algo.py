@@ -40,8 +40,16 @@ import threading
 import webbrowser
 import sqlite3
 import hashlib
-from flask import Flask, jsonify, request, send_from_directory, session, redirect, url_for, render_template
+from flask import Flask, jsonify, request, send_from_directory, send_file, session, redirect, url_for, render_template
 import requests
+
+try:
+    import pyotp
+    PYOTP_AVAILABLE = True
+except ImportError:
+    PYOTP_AVAILABLE = False
+    print("[WARNING] pyotp module not available.")
+
 
 
 # Monkey patch requests to prevent any infinite hangs in external libraries
@@ -543,7 +551,7 @@ class UnifiedBrokerClient:
                     obj.setFeedToken(tokens["feedToken"])
                 
                 profile = obj.getProfile(raw_jwt)
-                if profile and profile.get("status") is True:
+                if profile and profile.get("status") is True and profile.get("data") and profile['data'].get('clientcode'):
                     log_message("SUCCESS", f"Resumed Angel One session for {profile['data']['name']} ({profile['data']['clientcode']})")
                     self.profile = {
                         "name": profile['data']['name'],
@@ -555,9 +563,19 @@ class UnifiedBrokerClient:
                     self.client_obj = obj
                     return True
                 else:
-                    log_message("WARNING", "Cached Angel One tokens expired. Authenticating...")
+                    log_message("WARNING", "Cached Angel One tokens expired or invalid. Clearing tokens.json...")
+                    try:
+                        if os.path.exists(TOKENS_FILE):
+                            os.remove(TOKENS_FILE)
+                    except Exception:
+                        pass
             except Exception as e:
                 log_message("WARNING", f"Error reading tokens.json: {e}")
+                try:
+                    if os.path.exists(TOKENS_FILE):
+                        os.remove(TOKENS_FILE)
+                except Exception:
+                    pass
                 
         try:
             log_message("INFO", "Logging in to Angel One using OTP code...")
@@ -568,7 +586,12 @@ class UnifiedBrokerClient:
                 log_message("INFO", f"Using entered dynamic OTP/2FA code: {totp_now}")
             elif totp_seed:
                 # Generate from saved TOTP seed if present (for background auto-reconnects)
-                totp_now = pyotp.TOTP(totp_seed).now()
+                try:
+                    totp_now = pyotp.TOTP(totp_seed.replace(" ", "")).now()
+                except Exception as totp_err:
+                    log_message("ERROR", f"Invalid TOTP Seed provided for Angel One: {totp_err}")
+                    self.profile["error_details"] = f"Invalid TOTP Key/Seed: {str(totp_err)}"
+                    return False
             else:
                 log_message("ERROR", "No active OTP/2FA PIN or TOTP seed provided.")
                 self.profile["error_details"] = "Please enter a valid 6-digit OTP/2FA code from your Authenticator app."
@@ -591,7 +614,7 @@ class UnifiedBrokerClient:
                 obj.setRefreshToken(tokens["refreshToken"])
                 
                 profile = obj.getProfile(raw_jwt)
-                name = profile['data']['name'] if (profile and profile.get("status") is True) else config.get("client_name", "Demo User")
+                name = profile['data']['name'] if (profile and profile.get("status") is True and profile.get("data")) else config.get("client_name", "Demo User")
                 self.profile = {
                     "name": name,
                     "client_code": username,
@@ -2552,10 +2575,12 @@ def run_trading_engine_thread():
             if not unified_broker.connected:
                 config = load_client_config()
                 if config:
-                    log_message("WARNING", "Reconnecting session to active Broker API...")
-                    unified_broker.connect(config)
+                    creds = config.get("credentials", {})
+                    if creds.get("totp_seed") or os.path.exists(TOKENS_FILE):
+                        log_message("WARNING", "Reconnecting session to active Broker API...")
+                        unified_broker.connect(config)
                 if not unified_broker.connected:
-                    time.sleep(3.0)
+                    time.sleep(10.0)
                     continue
                     
             # 2. Gather active tokens
@@ -2897,6 +2922,15 @@ def init_app_engine():
 init_app_engine()
 
 
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        res = app.make_default_options_response()
+        res.headers['Access-Control-Allow-Origin'] = '*'
+        res.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        res.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        return res, 200
+
 @app.after_request
 def add_cors_headers(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
@@ -2961,8 +2995,8 @@ def auth_status():
 @app.route('/api/auth/register', methods=['POST'])
 def auth_register():
     """Step 3 handler: save credentials and initiate broker first-step authentication.
-    For Fyers: calls send_login_otp so phone OTP is sent.
-    For Angel One / Zerodha: simply validates fields and proceeds to Step 4 TOTP entry.
+    For Angel One / Fyers with totp_seed: attempts immediate auto-login.
+    Otherwise: validates fields and proceeds to Step 4 TOTP/OTP entry.
     """
     global temp_otp_cache
     try:
@@ -3000,6 +3034,45 @@ def auth_register():
             return jsonify({"status": "error", "message": f"Missing required fields: {', '.join(missing)}"}), 400
 
         step4_hint = "Enter your 6-digit TOTP code from your authenticator app."
+
+        # For Angel One: auto-connect if totp_seed is provided
+        if broker_std == "ANGEL_ONE":
+            totp_seed = creds.get("totp_seed", "").strip()
+            if totp_seed:
+                log_message("INFO", f"Angel One TOTP Key provided. Attempting automatic login for {client_code}...")
+                try:
+                    temp_cache = {
+                        "client_name": name,
+                        "client_email": email,
+                        "client_mobile": mobile,
+                        "selected_broker": "ANGEL_ONE",
+                        "credentials": creds
+                    }
+                    success = unified_broker.connect(temp_cache)
+                    if success and unified_broker.connected:
+                        config_data = {
+                            "client_name": name,
+                            "client_email": email,
+                            "client_mobile": mobile,
+                            "selected_broker": "ANGEL_ONE",
+                            "credentials": temp_cache["credentials"],
+                            "mode": "REAL",
+                            "registered_at": datetime.now().isoformat()
+                        }
+                        save_client_config(config_data)
+                        log_message("SUCCESS", f"Client '{name}' successfully auto-connected to Angel One in REAL mode.")
+                        return jsonify({
+                            "status": "success",
+                            "connected": True,
+                            "message": "Successfully connected to Angel One automatically using your TOTP key!"
+                        })
+                    else:
+                        err_detail = unified_broker.profile.get("error_details", "Auto-connection failed.")
+                        log_message("WARNING", f"Angel One auto-connection with TOTP seed failed: {err_detail}. Proceeding to manual 2FA card.")
+                        step4_hint = f"Angel One auto-login failed: {err_detail}. Please enter your 6-digit Authenticator TOTP manually below."
+                except Exception as e:
+                    log_message("WARNING", f"Angel One auto-connection exception: {e}. Proceeding to manual 2FA card.")
+                    step4_hint = f"Angel One auto-login error: {str(e)}. Please enter your 6-digit Authenticator TOTP manually below."
 
         # For Fyers: initiate send_login_otp to trigger phone OTP or do TOTP auto-login
         if broker_std == "FYERS":
