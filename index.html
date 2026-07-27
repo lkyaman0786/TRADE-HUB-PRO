@@ -1675,7 +1675,7 @@
         // Fetch application state periodically (LTP, orders, strategies)
         async function fetchAppState() {
             try {
-                const res = await fetch(getApiUrl('/api/state');
+                const res = await fetch(getApiUrl('/api/state'));
                 if (!res.ok) throw new Error('API server returned error');
                 const data = await res.json();
 
@@ -1798,7 +1798,7 @@
             if (isAuthChecking) return;
             isAuthChecking = true;
             try {
-                const res = await fetch(getApiUrl('/api/auth/status');
+                const res = await fetch(getApiUrl('/api/auth/status'));
                 if (res.ok) {
                     const data = await res.json();
                     const authScreen = document.getElementById('auth-screen');
@@ -2479,7 +2479,7 @@
         async function updateStrategyHeader(h_row, field, value) {
             pendingUpdates[`${h_row}-${field}`] = Date.now();
             try {
-                const res = await fetch(getApiUrl('/api/strategy/update'), {
+                const res = await fetch(getApiUrl('/api/strategy/update')), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ header_row: h_row, field: field, value: value })
@@ -2493,7 +2493,7 @@
         async function updateLegField(h_row, leg_idx, field, value) {
             pendingUpdates[`${h_row}-${leg_idx}-${field}`] = Date.now();
             try {
-                const res = await fetch(getApiUrl('/api/strategy/leg/update'), {
+                const res = await fetch(getApiUrl('/api/strategy/leg/update')), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ header_row: h_row, leg_index: leg_idx, field: field, value: value })
@@ -2507,7 +2507,7 @@
 
         async function addLegToStrategy(h_row) {
             try {
-                const res = await fetch(getApiUrl('/api/strategy/leg/add'), {
+                const res = await fetch(getApiUrl('/api/strategy/leg/add')), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ header_row: h_row })
@@ -2525,7 +2525,7 @@
 
         async function deleteLegFromStrategy(h_row, leg_idx) {
             try {
-                const res = await fetch(getApiUrl('/api/strategy/leg/delete'), {
+                const res = await fetch(getApiUrl('/api/strategy/leg/delete')), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ header_row: h_row, leg_index: leg_idx })
@@ -2546,7 +2546,7 @@
             if (!strat) return;
             const newTrigger = strat.execute_trigger === 'GO' ? 'NONE' : 'GO';
             try {
-                await fetch(getApiUrl('/api/strategy/update'), {
+                await fetch(getApiUrl('/api/strategy/update')), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ header_row: h_row, field: 'execute_trigger', value: newTrigger })
@@ -2570,7 +2570,7 @@
         async function toggleEngine() {
             try {
                 // Determine engine state
-                const resStatus = await fetch(getApiUrl('/api/state');
+                const resStatus = await fetch(getApiUrl('/api/state'));
                 const data = await resStatus.json();
                 const path = data.engine_running ? '/api/engine/stop' : '/api/engine/start';
                 
@@ -2584,7 +2584,7 @@
         async function deleteStrategy(h_row) {
             if (!confirm('Are you sure you want to delete this options strategy?')) return;
             try {
-                const res = await fetch(getApiUrl('/api/strategy/delete'), {
+                const res = await fetch(getApiUrl('/api/strategy/delete')), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ header_row: h_row })
@@ -3398,7 +3398,7 @@
             }
 
             try {
-                const response = await fetch(getApiUrl(`/api/strategy/chart?id=${h_row}&timeframe=${timeframe}`);
+                const response = await fetch(getApiUrl(`/api/strategy/chart?id=${h_row}&timeframe=${timeframe}`));
                 if (!response.ok) throw new Error('API request failed');
                 
                 // Guard: If the modal was closed or switched to a different strategy, ignore in-flight updates
@@ -3802,7 +3802,7 @@
                 targetBtn.innerHTML = '<span class="material-symbols-outlined text-sm animate-spin">sync</span> IMPORTING...';
             }
             try {
-                const res = await fetch(getApiUrl('/api/strategy/import-all'), {
+                const res = await fetch(getApiUrl('/api/strategy/import-all')), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' }
                 });
@@ -3830,7 +3830,7 @@
             btn.disabled = true;
             btn.innerHTML = 'Detecting...';
             try {
-                const res = await fetch(getApiUrl('/api/strategy/position/detect'), {
+                const res = await fetch(getApiUrl('/api/strategy/position/detect')), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ header_row: h_row })
@@ -3858,7 +3858,7 @@
             const pos = document.getElementById('pos-position').value;
             const avg = document.getElementById('pos-avg-diff').value;
             try {
-                const res = await fetch(getApiUrl('/api/strategy/position/update'), {
+                const res = await fetch(getApiUrl('/api/strategy/position/update')), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ header_row: h_row, position: pos, avg_entry_diff: avg })
@@ -3914,7 +3914,7 @@
             const legs = document.getElementById('form-legs-count').value;
 
             try {
-                const res = await fetch(getApiUrl('/api/strategy/add'), {
+                const res = await fetch(getApiUrl('/api/strategy/add')), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -4033,7 +4033,7 @@
             btn.innerText = 'Connecting Session...';
 
             try {
-                const res = await fetch(getApiUrl('/api/auth/register'), {
+                const res = await fetch(getApiUrl('/api/auth/register')), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -4092,7 +4092,7 @@
             btn.innerText = 'Verifying...';
 
             try {
-                const res = await fetch(getApiUrl('/api/auth/verify-otp'), {
+                const res = await fetch(getApiUrl('/api/auth/verify-otp')), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ otp: otpVal })
@@ -4178,7 +4178,7 @@
             input.disabled = true;
             document.getElementById('chatbot-send-btn').disabled = true;
 
-            fetch(getApiUrl('/api/chat'), {
+            fetch(getApiUrl('/api/chat')), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: userText })

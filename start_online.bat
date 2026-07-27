@@ -9,5 +9,5 @@ start "Trade Hub Engine" python algo.py
 echo.
 echo [2/2] Launching Secure HTTPS Tunnel...
 echo.
-.\cloudflared.exe tunnel --url http://127.0.0.1:5000
+.\cloudflared.exe tunnel --protocol http2 --edge-ip-version 4 --url http://127.0.0.1:5000
 pause
