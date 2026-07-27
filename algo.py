@@ -3022,14 +3022,14 @@ def handle_preflight():
     if request.method == "OPTIONS":
         res = app.make_default_options_response()
         res.headers['Access-Control-Allow-Origin'] = '*'
-        res.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Client-Code'
+        res.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Client-Code, X-Admin-Token'
         res.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
         return res, 200
 
 @app.after_request
 def add_cors_headers(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Client-Code'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Client-Code, X-Admin-Token'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     return response
 
@@ -4487,21 +4487,33 @@ def admin_data():
     if request.headers.get('X-Admin-Token') != "admin_master_token_777":
         return jsonify({"status": "error", "message": "Unauthorized"}), 401
         
+    # Scan disk for all client configs and load sessions
+    import glob
+    cfg_files = glob.glob("client_config_*.json")
+    for cfg_file in cfg_files:
+        cc_match = re.search(r'client_config_(.+)\.json$', cfg_file)
+        if cc_match:
+            cc = cc_match.group(1)
+            state.get_session(cc)
+            
+    if os.path.exists("client_config.json"):
+        state.get_session("DEFAULT")
+
     admin_state = {
         "clients": [],
         "system_status": "RUNNING" if state.engine_running else "STOPPED",
-        "global_logs": state.sessions.get('DEFAULT', {}).get('app_logs', []) # or we could merge all logs
+        "global_logs": state.sessions.get('DEFAULT', {}).get('state.app_logs', [])
     }
     
     for cc, session in state.sessions.items():
-        if cc == 'DEFAULT': continue
-        
-        # Load client config to get name and mobile
+        if cc == 'DEFAULT' and len(state.sessions) > 1:
+            continue
+            
         client_name = "Unknown"
         client_mobile = "Unknown"
         client_broker = "Unknown"
-        cfg_file = f"client_config_{cc}.json"
-        import os, json
+        
+        cfg_file = f"client_config_{cc}.json" if cc != 'DEFAULT' else "client_config.json"
         if os.path.exists(cfg_file):
             try:
                 with open(cfg_file, 'r') as cf:
@@ -4512,17 +4524,25 @@ def admin_data():
             except:
                 pass
                 
-        # Get active strategies count
-        active_strats = len(session.get('active_strategies', {}))
+        active_strats_dict = session.get('state.active_strategies', {})
+        active_strats_count = len(active_strats_dict)
         
-        # Broker status
-        broker = session.get('unified_broker')
+        broker = session.get('state.unified_broker')
         broker_status = "Connected" if (broker and broker.connected) else "Disconnected"
         
-        # Aggregate P&L for this client
         pnl = 0.0
-        for s in session.get('active_strategies', {}).values():
-            pnl += s.get('overall_pnl', 0.0)
+        strats_list = []
+        for s_id, s in active_strats_dict.items():
+            strat_pnl = s.get('overall_pnl', 0.0) or s.get('pnl', 0.0)
+            pnl += strat_pnl
+            strats_list.append({
+                "id": s_id,
+                "name": s.get("name", "Strategy"),
+                "symbol": s.get("symbol", "NIFTY"),
+                "type": s.get("strategy_type", "SPREAD"),
+                "pnl": round(strat_pnl, 2),
+                "legs_count": len(s.get("legs", []))
+            })
             
         admin_state['clients'].append({
             "client_code": cc,
@@ -4530,50 +4550,9 @@ def admin_data():
             "mobile": client_mobile,
             "broker_name": client_broker,
             "status": broker_status,
-            "strategies_count": active_strats,
-            "overall_pnl": round(pnl, 2)
+            "strategies_count": active_strats_count,
+            "overall_pnl": round(pnl, 2),
+            "strategies": strats_list
         })
         
     return jsonify(admin_state)
-
-
-
-def launch_web_browser(port):
-    """Waiting for Flask thread to initialize before launching the web browser."""
-    time.sleep(1.5)
-    log_message("INFO", f"Auto-launching local Trade Hub Dashboard in your browser on port {port}...")
-    webbrowser.open(f"http://127.0.0.1:{port}")
-
-def main():
-    init_app_engine()
-    
-    host = os.environ.get("HOST", "0.0.0.0")
-    port = int(os.environ.get("PORT", 5000))
-    is_cloud = bool(os.environ.get("PORT") or os.environ.get("RAILWAY_STATIC_URL") or os.environ.get("RENDER"))
-
-    # Start browser auto-launcher (only when running locally)
-    if not is_cloud:
-        launcher_thread = threading.Thread(target=launch_web_browser, args=(port,), daemon=True)
-        launcher_thread.start()
-    
-    # Initialize Flask server
-    log_message("INFO", f"Starting Flask application Web Server on {host}:{port}...")
-
-    try:
-        app.run(host=host, port=port, debug=False, use_reloader=False)
-    except OSError as e:
-        if "Address already in use" in str(e) or "10048" in str(e):
-            print("\n" + "="*80)
-            print(f" [CRITICAL] PORT {port} IS ALREADY IN USE BY ANOTHER PROCESS!")
-            print(" Please close any other running python or terminal windows of Trade Hub.")
-            print(" If the error persists, restart your computer or kill zombie python processes.")
-            print("="*80 + "\n")
-            log_message("CRITICAL", f"Port {port} in use. Flask crashed.")
-            sys.exit(1)
-        else:
-            raise e
-
-
-if __name__ == "__main__":
-    main()
-

@@ -46,7 +46,7 @@
                     <label class="block text-xs uppercase tracking-wider text-gray-400 mb-1">Password</label>
                     <input type="password" id="admin-pass" class="w-full bg-black/40 border border-primary/30 rounded px-4 py-2 text-sm focus:border-primary outline-none text-white">
                 </div>
-                <button onclick="loginAdmin()" class="w-full mt-4 bg-primary hover:bg-orange-600 text-white font-bold py-2.5 rounded uppercase tracking-wider text-sm transition-colors">
+                <button onclick="loginAdmin()" class="w-full mt-4 bg-primary hover:bg-orange-600 text-white font-bold py-2.5 rounded uppercase tracking-wider text-sm transition-colors cursor-pointer">
                     Access System
                 </button>
                 <p id="login-error" class="text-red-500 text-xs text-center mt-2 hidden">Invalid credentials.</p>
@@ -68,7 +68,7 @@
                     </div>
                 </div>
             </div>
-            <button onclick="logoutAdmin()" class="px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-primary border border-primary/30 rounded hover:bg-primary/10 transition-colors flex items-center gap-2">
+            <button onclick="logoutAdmin()" class="px-4 py-1.5 text-xs font-bold uppercase tracking-wider text-primary border border-primary/30 rounded hover:bg-primary/10 transition-colors flex items-center gap-2 cursor-pointer">
                 <span class="material-symbols-outlined text-sm">logout</span> Logout
             </button>
         </header>
@@ -99,7 +99,7 @@
             <div class="lg:col-span-2 glass-panel p-0 flex flex-col overflow-hidden">
                 <div class="p-4 border-b border-white/5 flex justify-between items-center bg-white/5">
                     <h2 class="font-display font-bold uppercase tracking-wider text-sm flex items-center gap-2">
-                        <span class="material-symbols-outlined text-primary">groups</span> Connected Clients
+                        <span class="material-symbols-outlined text-primary">groups</span> Connected Clients (Click row to inspect strategies)
                     </h2>
                     <button onclick="fetchAdminData()" class="material-symbols-outlined text-gray-400 hover:text-white text-sm cursor-pointer">refresh</button>
                 </div>
@@ -134,7 +134,30 @@
         </div>
     </div>
 
+    <!-- CLIENT STRATEGY INSPECTION MODAL -->
+    <div id="modal-client-detail" class="hidden fixed inset-0 z-50 items-center justify-center bg-black/70 backdrop-blur-md">
+        <div class="glass-panel p-6 w-full max-w-2xl max-h-[80vh] flex flex-col relative border border-primary/30">
+            <button onclick="closeClientModal()" class="absolute top-4 right-4 text-gray-400 hover:text-white cursor-pointer">
+                <span class="material-symbols-outlined">close</span>
+            </button>
+            <div class="flex items-center gap-3 mb-4 pb-3 border-b border-white/10">
+                <span class="material-symbols-outlined text-primary text-3xl">account_circle</span>
+                <div>
+                    <h3 class="font-display font-bold text-lg text-white" id="modal-client-name">Client Name</h3>
+                    <p class="text-xs text-gray-400" id="modal-client-sub">Code: -- | Mobile: -- | Broker: --</p>
+                </div>
+            </div>
+            
+            <h4 class="font-display font-bold text-xs uppercase tracking-wider text-primary mb-3">Configured Strategies</h4>
+            <div class="flex-1 overflow-y-auto space-y-3 pr-1" id="modal-strategies-list">
+                <!-- Loaded dynamically -->
+            </div>
+        </div>
+    </div>
+
     <script>
+        let currentAdminData = null;
+
         async function discoverLiveTunnel() {
             if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') return;
             try {
@@ -221,6 +244,7 @@
                 });
                 if(res.status === 401) { logoutAdmin(); return; }
                 const data = await res.json();
+                currentAdminData = data;
                 renderDashboard(data);
             } catch(e) {
                 console.error("Failed to fetch admin data", e);
@@ -240,16 +264,16 @@
             if(data.clients.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="6" class="text-center py-8 text-gray-500 italic text-xs">No clients registered yet.</td></tr>`;
             } else {
-                data.clients.forEach(c => {
+                data.clients.forEach((c, idx) => {
                     const statusClass = c.status === 'Connected' ? 'status-connected' : 'status-disconnected';
                     const pnlColor = c.overall_pnl >= 0 ? 'text-green-400' : 'text-red-400';
                     tbody.innerHTML += `
-                        <tr class="border-b border-white/5 hover:bg-white/5 transition-colors">
+                        <tr onclick="inspectClient(${idx})" class="border-b border-white/5 hover:bg-white/10 transition-colors cursor-pointer">
                             <td class="py-3 px-2 font-mono text-primary font-bold">${c.client_code}</td>
                             <td class="py-3 px-2 text-white">${c.name} <span class="text-xs text-gray-500 block">${c.mobile}</span></td>
                             <td class="py-3 px-2 text-gray-300 font-medium">${c.broker_name}</td>
                             <td class="py-3 px-2 text-center"><span class="status-badge ${statusClass}">${c.status}</span></td>
-                            <td class="py-3 px-2 text-center text-white font-mono">${c.strategies_count}</td>
+                            <td class="py-3 px-2 text-center text-white font-mono font-bold">${c.strategies_count}</td>
                             <td class="py-3 px-2 text-right font-mono font-bold ${pnlColor}">₹${c.overall_pnl.toFixed(2)}</td>
                         </tr>
                     `;
@@ -267,6 +291,46 @@
                 }).join('');
                 logBox.scrollTop = logBox.scrollHeight;
             }
+        }
+
+        function inspectClient(index) {
+            if(!currentAdminData || !currentAdminData.clients[index]) return;
+            const client = currentAdminData.clients[index];
+            
+            document.getElementById('modal-client-name').textContent = client.name;
+            document.getElementById('modal-client-sub').textContent = `Code: ${client.client_code} | Mobile: ${client.mobile} | Broker: ${client.broker_name} (${client.status})`;
+            
+            const listEl = document.getElementById('modal-strategies-list');
+            listEl.innerHTML = '';
+            
+            if(!client.strategies || client.strategies.length === 0) {
+                listEl.innerHTML = `<div class="p-4 text-center text-gray-500 text-xs italic bg-black/40 rounded">No active strategies configured for this client.</div>`;
+            } else {
+                client.strategies.forEach(s => {
+                    const pnlColor = s.pnl >= 0 ? 'text-green-400' : 'text-red-400';
+                    listEl.innerHTML += `
+                        <div class="p-3 bg-black/40 border border-white/10 rounded flex justify-between items-center">
+                            <div>
+                                <span class="font-bold text-white text-sm font-display">${s.name}</span>
+                                <div class="text-[10px] text-gray-400 font-mono mt-0.5">${s.symbol} • ${s.type} • ${s.legs_count} Legs</div>
+                            </div>
+                            <div class="text-right">
+                                <span class="font-mono font-bold text-xs ${pnlColor}">₹${s.pnl.toFixed(2)}</span>
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+            
+            const modal = document.getElementById('modal-client-detail');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+
+        function closeClientModal() {
+            const modal = document.getElementById('modal-client-detail');
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
         }
     </script>
 </body>

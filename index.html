@@ -4096,7 +4096,7 @@
             btn.disabled = true;
             btn.innerText = 'Connecting Session...';
 
-            const clientCode = creds.client_code || mobile || name;
+            const clientCode = mobile || creds.client_code || name;
             if (clientCode) {
                 localStorage.setItem('th_client_code', clientCode);
             }
