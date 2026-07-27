@@ -4473,6 +4473,78 @@ def main():
         else:
             raise e
 
+
+# ==========================================
+# ADMIN DASHBOARD ROUTES
+# ==========================================
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "123"
+
+@app.route('/admin')
+def admin_dashboard():
+    return render_template('admin.html')
+
+@app.route('/api/admin/login', methods=['POST'])
+def admin_login():
+    data = request.get_json()
+    if data and data.get('username') == ADMIN_USERNAME and data.get('password') == ADMIN_PASSWORD:
+        return jsonify({"status": "success", "token": "admin_master_token_777"})
+    return jsonify({"status": "error", "message": "Invalid credentials"}), 401
+
+@app.route('/api/admin/data', methods=['GET'])
+def admin_data():
+    if request.headers.get('X-Admin-Token') != "admin_master_token_777":
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+        
+    admin_state = {
+        "clients": [],
+        "system_status": "RUNNING" if state.engine_running else "STOPPED",
+        "global_logs": state.sessions.get('DEFAULT', {}).get('app_logs', []) # or we could merge all logs
+    }
+    
+    for cc, session in state.sessions.items():
+        if cc == 'DEFAULT': continue
+        
+        # Load client config to get name and mobile
+        client_name = "Unknown"
+        client_mobile = "Unknown"
+        client_broker = "Unknown"
+        cfg_file = f"client_config_{cc}.json"
+        import os, json
+        if os.path.exists(cfg_file):
+            try:
+                with open(cfg_file, 'r') as cf:
+                    cfg = json.load(cf)
+                    client_name = cfg.get('client_name', 'Unknown')
+                    client_mobile = cfg.get('client_mobile', 'Unknown')
+                    client_broker = cfg.get('selected_broker', 'Unknown')
+            except:
+                pass
+                
+        # Get active strategies count
+        active_strats = len(session.get('active_strategies', {}))
+        
+        # Broker status
+        broker = session.get('unified_broker')
+        broker_status = "Connected" if (broker and broker.connected) else "Disconnected"
+        
+        # Aggregate P&L for this client
+        pnl = 0.0
+        for s in session.get('active_strategies', {}).values():
+            pnl += s.get('overall_pnl', 0.0)
+            
+        admin_state['clients'].append({
+            "client_code": cc,
+            "name": client_name,
+            "mobile": client_mobile,
+            "broker_name": client_broker,
+            "status": broker_status,
+            "strategies_count": active_strats,
+            "overall_pnl": round(pnl, 2)
+        })
+        
+    return jsonify(admin_state)
+
 if __name__ == "__main__":
     main()
 
