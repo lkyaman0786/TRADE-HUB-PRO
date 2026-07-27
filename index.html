@@ -387,7 +387,13 @@
 <body class="font-body text-xs min-h-screen flex flex-col overflow-hidden">
 
     <!-- 1. MULTI-STEP ONBOARDING WIZARD SCREEN (auth-screen) -->
-    <div id="auth-screen" class="flex min-h-screen w-full flex-col justify-center items-center p-6 bg-surface-dim transition-all duration-300">
+    <div id="auth-screen" class="flex min-h-screen w-full flex-col justify-center items-center p-6 bg-surface-dim transition-all duration-300 relative">
+        <!-- Manual Tunnel Config Button -->
+        <button onclick="toggleBackendConfigModal(true)" class="absolute top-6 right-6 flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 border border-primary/30 rounded-full text-primary hover:bg-primary/20 hover:text-white transition-all text-[10px] uppercase tracking-widest font-bold cursor-pointer z-50">
+            <span class="material-symbols-outlined text-[14px]">wifi_tethering</span>
+            Link Server
+        </button>
+
         <!-- Wizard Card -->
         <div class="w-full max-w-[800px] mb-8">
             <div class="flex items-center justify-between relative px-8">
@@ -4320,5 +4326,31 @@
         </div>
     </div>
 
+    <!-- Backend Configuration Modal -->
+    <div id="modal-backend-config" class="hidden fixed inset-0 z-[100] items-center justify-center bg-black/60 backdrop-blur-sm">
+        <div class="glass-panel p-6 w-[400px] border border-primary/20 relative shadow-2xl">
+            <button type="button" onclick="toggleBackendConfigModal(false)" class="absolute top-4 right-4 text-gray-400 hover:text-white transition-colors cursor-pointer">
+                <span class="material-symbols-outlined">close</span>
+            </button>
+            <h3 class="text-lg font-bold font-display text-white mb-2 flex items-center gap-2">
+                <span class="material-symbols-outlined text-primary">dns</span> Server Connection
+            </h3>
+            <p class="text-[11px] text-gray-400 mb-6 leading-relaxed">
+                Enter your live Cloudflare Tunnel URL below to connect the frontend to your background Python trading engine.
+            </p>
+            <form id="frm-backend" class="space-y-4" onsubmit="event.preventDefault(); saveBackendUrl();">
+                <div>
+                    <label class="block text-[10px] uppercase tracking-wider text-gray-400 mb-1 font-bold">Tunnel URL</label>
+                    <input type="text" id="cfg-backend-url" class="w-full bg-black/50 border border-white/10 rounded px-3 py-2.5 text-xs text-white outline-none focus:border-primary transition-colors font-mono" placeholder="https://xxx-xxx.trycloudflare.com">
+                </div>
+                <div class="flex justify-end gap-3 mt-6">
+                    <button type="button" onclick="toggleBackendConfigModal(false)" class="px-4 py-2 bg-transparent hover:bg-white/5 border border-white/10 text-white rounded text-xs font-bold transition-colors cursor-pointer">Cancel</button>
+                    <button type="submit" class="px-4 py-2 bg-primary hover:bg-primary/90 text-white rounded text-xs font-bold transition-colors shadow-lg cursor-pointer flex items-center gap-2">
+                        <span class="material-symbols-outlined text-[14px]">save</span> Save & Connect
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
 </body>
 </html>
