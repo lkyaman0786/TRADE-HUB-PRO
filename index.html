@@ -388,11 +388,6 @@
 
     <!-- 1. MULTI-STEP ONBOARDING WIZARD SCREEN (auth-screen) -->
     <div id="auth-screen" class="flex min-h-screen w-full flex-col justify-center items-center p-6 bg-surface-dim transition-all duration-300 relative">
-        <!-- Manual Tunnel Config Button -->
-        <button onclick="toggleBackendConfigModal(true)" class="absolute top-6 right-6 flex items-center gap-1.5 px-3 py-1.5 bg-primary/10 border border-primary/30 rounded-full text-primary hover:bg-primary/20 hover:text-white transition-all text-[10px] uppercase tracking-widest font-bold cursor-pointer z-50">
-            <span class="material-symbols-outlined text-[14px]">wifi_tethering</span>
-            Link Server
-        </button>
 
         <!-- Wizard Card -->
         <div class="w-full max-w-[800px] mb-8">
@@ -723,11 +718,6 @@
 
                 <!-- Top Right: Connection status and controls -->
                 <div class="flex items-center gap-4">
-                    <!-- Broker logo tag -->
-                    <button onclick="toggleBackendConfigModal(true)" title="Configure Live Backend Engine Tunnel URL" class="flex items-center gap-1.5 text-[9px] font-bold px-2.5 py-1 rounded border border-primary/30 hover:border-primary bg-primary/10 hover:bg-primary/20 text-primary transition-all cursor-pointer">
-                        <span class="material-symbols-outlined text-[13px]">dns</span>
-                        <span>SERVER CONNECT</span>
-                    </button>
                     <span id="client-broker" class="text-[9px] font-bold px-2 py-0.5 rounded border border-outline-variant bg-surface-container uppercase tracking-wide">BROKER</span>
                     
                     <!-- Mode badge (Live Mode / Mock) -->
@@ -1633,26 +1623,27 @@
         
         // Multi-Tenant Auto-Tunnel Discovery
         async function discoverLiveTunnel() {
-            if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') return;
+            if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') return '';
             try {
-                // Fetch the live URL published by the backend server via GitHub
-                const res = await fetch('https://raw.githubusercontent.com/lkyaman0786/TRADE-HUB-PRO/main/backend_url.txt?t=' + Date.now());
+                // First try relative backend_url.txt on same domain (GitHub Pages)
+                let res = await fetch('./backend_url.txt?t=' + Date.now());
+                if (!res.ok) {
+                    res = await fetch('https://raw.githubusercontent.com/lkyaman0786/TRADE-HUB-PRO/main/backend_url.txt?t=' + Date.now());
+                }
                 if (res.ok) {
                     const text = await res.text();
                     const url = text.trim();
                     if (url.startsWith('http')) {
-                        const currentUrl = localStorage.getItem('th_backend_url');
-                        if (currentUrl !== url) {
-                            localStorage.setItem('th_backend_url', url);
-                            console.log("Auto-discovered live tunnel URL:", url);
-                        }
+                        localStorage.setItem('th_backend_url', url);
+                        console.log("Auto-discovered live tunnel URL:", url);
+                        return url;
                     }
                 }
             } catch(e) {
                 console.log("Could not auto-discover tunnel URL.");
             }
+            return '';
         }
-        discoverLiveTunnel();
 
         // Custom fetch wrapper to inject X-Client-Code header for multi-tenant isolation
         async function apiFetch(path, options = {}) {
@@ -1915,14 +1906,14 @@
             pollingTimerId = setInterval(fetchAppState, refreshSpeed);
         }
         
+        async function initApp() {
+            await discoverLiveTunnel();
+            checkAuthStatus();
+            fetchAppState();
+            initPolling();
+        }
         setInterval(checkAuthStatus, 5000);
-        checkAuthStatus();
-        fetchAppState();
-                if (!localStorage.getItem('th_backend_url') && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-                    setTimeout(() => toggleBackendConfigModal(true), 500);
-                }
-
-        initPolling();
+        initApp();
 
         // Switch tab segment NFO/MCX
         function switchSegment(segment) {
@@ -4054,12 +4045,6 @@
         }
 
         async function submitBrokerRegistration() {
-            // Guard against HTTP 405 on static web hosts (GitHub Pages tradehub.nhtrade.in)
-            if (!getBackendBaseUrl() && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-                alert("Please click 'Connect Server / Tunnel' first and paste your Cloudflare Tunnel URL (from Start_Online_Server.bat) so credentials can be sent to your live Python engine.");
-                toggleBackendConfigModal(true);
-                return;
-            }
             const name = document.getElementById('auth-client-name').value.trim();
             const email = document.getElementById('auth-client-email').value.trim();
             const mobile = document.getElementById('auth-client-mobile').value.trim();
@@ -4150,11 +4135,6 @@
         }
 
         async function submitOTPVerification() {
-            if (!getBackendBaseUrl() && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-                alert("Please click 'Connect Server / Tunnel' first and paste your Cloudflare Tunnel URL (from Start_Online_Server.bat).");
-                toggleBackendConfigModal(true);
-                return;
-            }
             const otpVal = document.getElementById('auth-otp-input').value.trim();
             if (!otpVal) {
                 alert('Please enter your 6-digit OTP/TOTP code.');

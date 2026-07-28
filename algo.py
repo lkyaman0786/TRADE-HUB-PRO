@@ -4535,13 +4535,34 @@ def admin_data():
         for s_id, s in active_strats_dict.items():
             strat_pnl = s.get('overall_pnl', 0.0) or s.get('pnl', 0.0)
             pnl += strat_pnl
+            
+            legs_formatted = []
+            for leg in s.get("legs", []):
+                legs_formatted.append({
+                    "action": leg.get("action", "BUY"),
+                    "opt_type": leg.get("opt_type", "CE"),
+                    "strike": leg.get("strike", ""),
+                    "expiry": leg.get("expiry", ""),
+                    "lot": leg.get("lot", 1.0),
+                    "entry_price": leg.get("entry_price", 0.0),
+                    "symbol": leg.get("symbol", ""),
+                    "status": leg.get("status", "")
+                })
+
             strats_list.append({
                 "id": s_id,
-                "name": s.get("name", "Strategy"),
+                "name": s.get("name", f"Strategy {s.get('symbol', 'NIFTY')}"),
                 "symbol": s.get("symbol", "NIFTY"),
+                "expiry": s.get("expiry", ""),
                 "type": s.get("strategy_type", "SPREAD"),
+                "position": s.get("position", 0.0),
+                "avg_entry_diff": s.get("avg_entry_diff"),
+                "target_buy": s.get("target_buy"),
+                "target_sell": s.get("target_sell"),
+                "status": s.get("status", "Active"),
                 "pnl": round(strat_pnl, 2),
-                "legs_count": len(s.get("legs", []))
+                "legs_count": len(legs_formatted),
+                "legs": legs_formatted
             })
             
         admin_state['clients'].append({
@@ -4556,3 +4577,8 @@ def admin_data():
         })
         
     return jsonify(admin_state)
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    print(f"\n[INFO] Starting Flask Backend Server on http://127.0.0.1:{port} ...\n")
+    app.run(host='0.0.0.0', port=port, debug=False)
