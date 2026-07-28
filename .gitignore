@@ -1,9 +1,10 @@
-# Sensitive credentials and session tokens
-client_config.json
-tokens.json
-users.json
+# Client Data & Sensitive Credentials (Local Only - Never Upload)
+client_data/*
+!client_data/strategies.json
+client_config*.json
+tokens*.json
+users*.json
 .env
-
 
 # Large downloaded database / master files
 OpenAPIScripMaster.json
