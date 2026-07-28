@@ -100,6 +100,31 @@ state_lock = threading.RLock()
 import contextvars
 client_ctx = contextvars.ContextVar('client_ctx', default='DEFAULT')
 
+CLIENT_DATA_DIR = "client_data"
+
+def get_client_file_path(filename):
+    if not os.path.exists(CLIENT_DATA_DIR):
+        os.makedirs(CLIENT_DATA_DIR, exist_ok=True)
+    return os.path.join(CLIENT_DATA_DIR, os.path.basename(filename))
+
+def migrate_client_data_files():
+    if not os.path.exists(CLIENT_DATA_DIR):
+        os.makedirs(CLIENT_DATA_DIR, exist_ok=True)
+    import glob, shutil
+    patterns = ["client_config_*.json", "client_config.json", "strategies_*.json", "strategies.json", "tokens_*.json", "tokens.json"]
+    for pattern in patterns:
+        for fpath in glob.glob(pattern):
+            if fpath.startswith("client_data") or "example" in fpath:
+                continue
+            if os.path.isfile(fpath):
+                dest = os.path.join(CLIENT_DATA_DIR, os.path.basename(fpath))
+                try:
+                    if not os.path.exists(dest):
+                        shutil.move(fpath, dest)
+                        print(f"[INFO] Migrated client data file '{fpath}' -> '{dest}'")
+                except Exception as e:
+                    print(f"[WARNING] Could not move {fpath}: {e}")
+
 class MultiTenantState:
     def __init__(self):
         self.sessions = {}
@@ -116,9 +141,15 @@ class MultiTenantState:
                 'state.unified_broker': broker_client
             }
             # Auto-load saved strategies for this tenant
-            target_strat = f"strategies_{cc}.json" if cc != 'DEFAULT' else "strategies.json"
-            if not os.path.exists(target_strat) and os.path.exists("strategies.json"):
-                target_strat = "strategies.json"
+            target_strat = get_client_file_path(f"strategies_{cc}.json" if cc != 'DEFAULT' else "strategies.json")
+            if not os.path.exists(target_strat):
+                root_strat = f"strategies_{cc}.json" if cc != 'DEFAULT' else "strategies.json"
+                if os.path.exists(root_strat):
+                    target_strat = root_strat
+                elif os.path.exists(get_client_file_path("strategies.json")):
+                    target_strat = get_client_file_path("strategies.json")
+                elif os.path.exists("strategies.json"):
+                    target_strat = "strategies.json"
             if os.path.exists(target_strat):
                 try:
                     with open(target_strat, "r") as f:
@@ -127,9 +158,15 @@ class MultiTenantState:
                     print(f"[ERROR] Failed loading strategies for tenant {cc}: {e}")
                     
             # Auto-connect broker from saved config for this tenant
-            target_cfg = f"client_config_{cc}.json" if cc != 'DEFAULT' else "client_config.json"
-            if not os.path.exists(target_cfg) and os.path.exists("client_config.json"):
-                target_cfg = "client_config.json"
+            target_cfg = get_client_file_path(f"client_config_{cc}.json" if cc != 'DEFAULT' else "client_config.json")
+            if not os.path.exists(target_cfg):
+                root_cfg = f"client_config_{cc}.json" if cc != 'DEFAULT' else "client_config.json"
+                if os.path.exists(root_cfg):
+                    target_cfg = root_cfg
+                elif os.path.exists(get_client_file_path("client_config.json")):
+                    target_cfg = get_client_file_path("client_config.json")
+                elif os.path.exists("client_config.json"):
+                    target_cfg = "client_config.json"
             if os.path.exists(target_cfg):
                 try:
                     with open(target_cfg, "r") as f:
@@ -159,21 +196,20 @@ class MultiTenantState:
     def unified_broker(self, val):
         self.get_session()['state.unified_broker'] = val
 
-
     @property
     def STRATEGIES_FILE(self):
         cc = client_ctx.get()
-        return f"strategies_{cc}.json" if cc != 'DEFAULT' else "strategies.json"
+        return get_client_file_path(f"strategies_{cc}.json" if cc != 'DEFAULT' else "strategies.json")
         
     @property
     def TOKENS_FILE(self):
         cc = client_ctx.get()
-        return f"tokens_{cc}.json" if cc != 'DEFAULT' else "tokens.json"
+        return get_client_file_path(f"tokens_{cc}.json" if cc != 'DEFAULT' else "tokens.json")
 
     @property
     def CLIENT_CONFIG_FILE(self):
         cc = client_ctx.get()
-        return f"client_config_{cc}.json" if cc != 'DEFAULT' else "client_config.json"
+        return get_client_file_path(f"client_config_{cc}.json" if cc != 'DEFAULT' else "client_config.json")
 
 state = MultiTenantState()
 
@@ -3003,6 +3039,7 @@ def init_app_engine():
     print("  COMMERCIAL MULTI-BROKER OPTIONS TRADE HUB ENGINE RUNNING (ONLINE PROD DASHBOARD)")
     print("="*70 + "\n")
     log_message("INFO", "Initializing Trade Hub Pro Engine components...")
+    migrate_client_data_files()
     init_db()
     state.unified_broker = UnifiedBrokerClient()
     lookup_engine = ScripMasterLookup("OpenAPIScripMaster.json")
@@ -4489,14 +4526,14 @@ def admin_data():
         
     # Scan disk for all client configs and load sessions
     import glob
-    cfg_files = glob.glob("client_config_*.json")
+    cfg_files = glob.glob(os.path.join(CLIENT_DATA_DIR, "client_config_*.json")) + glob.glob("client_config_*.json")
     for cfg_file in cfg_files:
         cc_match = re.search(r'client_config_(.+)\.json$', cfg_file)
         if cc_match:
             cc = cc_match.group(1)
             state.get_session(cc)
             
-    if os.path.exists("client_config.json"):
+    if os.path.exists(get_client_file_path("client_config.json")) or os.path.exists("client_config.json"):
         state.get_session("DEFAULT")
 
     admin_state = {
@@ -4513,7 +4550,9 @@ def admin_data():
         client_mobile = "Unknown"
         client_broker = "Unknown"
         
-        cfg_file = f"client_config_{cc}.json" if cc != 'DEFAULT' else "client_config.json"
+        cfg_file = get_client_file_path(f"client_config_{cc}.json" if cc != 'DEFAULT' else "client_config.json")
+        if not os.path.exists(cfg_file):
+            cfg_file = f"client_config_{cc}.json" if cc != 'DEFAULT' else "client_config.json"
         if os.path.exists(cfg_file):
             try:
                 with open(cfg_file, 'r') as cf:

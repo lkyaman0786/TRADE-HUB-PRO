@@ -1645,9 +1645,9 @@
             return '';
         }
 
-        // Custom fetch wrapper to inject X-Client-Code header for multi-tenant isolation
+        // Custom fetch wrapper with auto-retry and auto-healing on stale tunnel URLs
         async function apiFetch(path, options = {}) {
-            const url = getApiUrl(path);
+            let url = getApiUrl(path);
             const clientCode = localStorage.getItem('th_client_code') || '';
             
             if (!options.headers) options.headers = {};
@@ -1658,7 +1658,21 @@
                 options.headers['X-Client-Code'] = clientCode;
             }
             
-            return fetch(url, options);
+            try {
+                return await fetch(url, options);
+            } catch (err) {
+                // If fetch failed (stale/expired tunnel URL in normal browser cache), auto-discover latest tunnel and retry
+                console.warn("apiFetch failed on URL:", url, "Attempting auto-tunnel refresh...");
+                const newUrl = await discoverLiveTunnel();
+                if (newUrl) {
+                    const retryUrl = getApiUrl(path);
+                    if (retryUrl !== url) {
+                        console.log("Retrying apiFetch with refreshed tunnel URL:", retryUrl);
+                        return await fetch(retryUrl, options);
+                    }
+                }
+                throw err;
+            }
         }
 
         function getBackendBaseUrl() {
