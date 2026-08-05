@@ -1560,7 +1560,7 @@
         let mcxExpiries = [];
         let nfoSymbols = [];
         let mcxSymbols = [];
-        let refreshSpeed = 2000;
+        let refreshSpeed = 100;
         let pollingTimerId = null;
 
         // Onboarding form state
@@ -1742,10 +1742,10 @@
                 updateNiftyTicker(data.nifty_ltp, data.nifty_change, data.nifty_pct);
 
                 // Update Profile and header controls
-                document.getElementById('client-broker').innerText = data.broker || 'NONE';
+                document.getElementById('client-broker').innerText = data.broker ? data.broker + ' ⚡ LIVE WS' : 'NONE';
                 
                 // Keep the broker connection tags in Settings updated
-                document.getElementById('broker-setting-name').innerText = data.broker || 'None';
+                document.getElementById('broker-setting-name').innerText = data.broker ? data.broker + ' (WebSocket Streaming)' : 'None';
                 document.getElementById('broker-setting-code').innerText = data.client_code || '--';
 
                 // Sync engine running triggers status

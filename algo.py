@@ -8,7 +8,8 @@ REQUIRED_PACKAGES = {
     "fyers_apiv3": "fyers-apiv3",
     "kiteconnect": "kiteconnect",
     "flask": "Flask",
-    "requests": "requests"
+    "requests": "requests",
+    "setuptools": "setuptools"
 }
 
 def bootstrap_packages():
@@ -218,32 +219,42 @@ lookup_engine = None
 import random
 last_nifty_price = 24194.65
 nifty_prev_close = 24021.65
+last_nifty_fetch_time = 0.0
 
 def get_nifty_live_price():
-    global last_nifty_price, nifty_prev_close
-    if state.unified_broker and state.unified_broker.connected:
-        try:
-            if state.unified_broker.broker == "ANGEL_ONE":
-                res = state.unified_broker.get_market_data({"NSE": ["99926000"]})
-                if res and "99926000" in res:
-                    last_nifty_price = res["99926000"]["ltp"]
-                    if "close" in res["99926000"] and res["99926000"]["close"] > 0:
-                        nifty_prev_close = res["99926000"]["close"]
-            elif state.unified_broker.broker == "FYERS":
-                res = state.unified_broker.get_market_data({"NSE": ["26000"]})
-                if res and "26000" in res:
-                    last_nifty_price = res["26000"]["ltp"]
-                    if "close" in res["26000"] and res["26000"]["close"] > 0:
-                        nifty_prev_close = res["26000"]["close"]
-        except Exception:
-            pass
-            
-    # Simulate a small dynamic price fluctuation (tick update)
-    tick_change = random.choice([-1.0, -0.5, 0.0, 0.5, 1.0]) * random.uniform(0.1, 0.8)
-    last_nifty_price = round(last_nifty_price + tick_change, 2)
+    global last_nifty_price, nifty_prev_close, last_nifty_fetch_time
+    now = time.time()
+    if now - last_nifty_fetch_time > 1.0:
+        last_nifty_fetch_time = now
+        if state.unified_broker and state.unified_broker.connected:
+            try:
+                if state.unified_broker.broker == "ANGEL_ONE":
+                    res = state.unified_broker.get_market_data({"NSE": ["99926000"]})
+                    if res and "99926000" in res and res["99926000"].get("ltp"):
+                        last_nifty_price = float(res["99926000"]["ltp"])
+                        if res["99926000"].get("close", 0) > 0:
+                            nifty_prev_close = float(res["99926000"]["close"])
+                elif state.unified_broker.broker == "ZERODHA":
+                    res = state.unified_broker.get_market_data({"NSE": ["NSE:NIFTY 50"]})
+                    if res:
+                        for k, v in res.items():
+                            if v.get("ltp"):
+                                last_nifty_price = float(v["ltp"])
+                elif state.unified_broker.broker == "FYERS":
+                    res = state.unified_broker.get_market_data({"NSE": ["NSE:NIFTY50-INDEX"]})
+                    if res:
+                        for k, v in res.items():
+                            if v.get("ltp"):
+                                last_nifty_price = float(v["ltp"])
+            except Exception:
+                pass
+
+    if nifty_prev_close <= 0:
+        nifty_prev_close = 24021.65
+
     change_val = round(last_nifty_price - nifty_prev_close, 2)
     change_pct = round((change_val / nifty_prev_close) * 100, 2)
-    return last_nifty_price, change_val, change_pct
+    return round(last_nifty_price, 2), change_val, change_pct
 
 def log_message(level, message):
     """
@@ -586,6 +597,14 @@ class UnifiedBrokerClient:
         self._zerodha_subscribed = set()
         self._zerodha_token_map = {}
         self._zerodha_ticker = None
+        # Angel One WebSocket Ticker cache
+        self._angel_ticks = {}
+        self._angel_subscribed = set()
+        self._angel_ticker = None
+        # Fyers WebSocket Ticker cache
+        self._fyers_ticks = {}
+        self._fyers_subscribed = set()
+        self._fyers_ticker = None
         self.api_lock = threading.Lock()
 
     def connect(self, config):
@@ -620,6 +639,14 @@ class UnifiedBrokerClient:
             except Exception:
                 pass
             self._zerodha_ticker = None
+
+        # Stop Angel One WebSocket Ticker if running
+        if hasattr(self, "_angel_ticker") and self._angel_ticker is not None:
+            try:
+                self._angel_ticker.close_connection()
+            except Exception:
+                pass
+            self._angel_ticker = None
             
         # Clean caches
         if hasattr(self, "_zerodha_ticks"):
@@ -628,7 +655,122 @@ class UnifiedBrokerClient:
             self._zerodha_subscribed.clear()
         if hasattr(self, "_zerodha_token_map"):
             self._zerodha_token_map.clear()
+        if hasattr(self, "_angel_ticks"):
+            self._angel_ticks.clear()
+        if hasattr(self, "_angel_subscribed"):
+            self._angel_subscribed.clear()
+        if hasattr(self, "_fyers_ticks"):
+            self._fyers_ticks.clear()
+        if hasattr(self, "_fyers_subscribed"):
+            self._fyers_subscribed.clear()
         log_message("WARNING", "Unified Broker Client disconnected.")
+
+    def start_angel_ticker(self, config=None, creds=None):
+        """Initializes Angel One High-Speed SmartWebSocketV2 Live Ticker Feed."""
+        if hasattr(self, "_angel_ticker") and self._angel_ticker is not None:
+            return
+
+        try:
+            from SmartApi.smartWebSocketV2 import SmartWebSocketV2
+        except ImportError:
+            log_message("WARNING", "SmartWebSocketV2 module not available. Angel One will fall back to REST API.")
+            return
+
+        tokens = {}
+        if os.path.exists(state.TOKENS_FILE):
+            try:
+                with open(state.TOKENS_FILE, "r") as f:
+                    tokens = json.load(f)
+            except Exception:
+                pass
+
+        auth_token = tokens.get("jwtToken")
+        raw_jwt = auth_token.replace("Bearer ", "") if auth_token else ""
+
+        if not creds and isinstance(config, dict):
+            creds = config.get("credentials", {})
+        if not creds:
+            creds = {}
+
+        api_key = creds.get("api_key", "").strip()
+        client_code = creds.get("client_code", "").strip() or self.profile.get("client_code", "").strip()
+        feed_token = tokens.get("feedToken", "").strip() or (getattr(self.client_obj, 'feed_token', '') if self.client_obj else "")
+
+        if not raw_jwt or not api_key or not client_code or not feed_token:
+            log_message("WARNING", f"Angel One WebSocket missing params (jwt={bool(raw_jwt)}, key={bool(api_key)}, code={bool(client_code)}, feed={bool(feed_token)})")
+            return
+
+        try:
+            log_message("INFO", "Initializing Angel One SmartWebSocketV2 Live Ticker Feed...")
+            sws = SmartWebSocketV2(raw_jwt, api_key, client_code, feed_token)
+
+            def on_data(wsapp, data):
+                if not isinstance(data, dict):
+                    return
+                token = str(data.get("token", "")).strip()
+                if not token:
+                    return
+
+                raw_ltp = data.get("last_traded_price", 0)
+                ltp = float(raw_ltp) / 100.0 if raw_ltp > 0 else 0.0
+
+                buy_list = []
+                for item in data.get("best_5_buy_data", []):
+                    p = float(item.get("price", 0)) / 100.0
+                    q = int(item.get("quantity", 0))
+                    if p > 0:
+                        buy_list.append({"price": p, "quantity": q})
+
+                sell_list = []
+                for item in data.get("best_5_sell_data", []):
+                    p = float(item.get("price", 0)) / 100.0
+                    q = int(item.get("quantity", 0))
+                    if p > 0:
+                        sell_list.append({"price": p, "quantity": q})
+
+                bid = buy_list[0]["price"] if buy_list else ltp
+                ask = sell_list[0]["price"] if sell_list else ltp
+
+                self._angel_ticks[token] = {
+                    "ltp": ltp,
+                    "bid": bid or ltp,
+                    "ask": ask or ltp,
+                    "buy_depth": buy_list,
+                    "sell_depth": sell_list,
+                    "timestamp": time.time()
+                }
+
+            def on_open(wsapp):
+                log_message("SUCCESS", "Angel One High-Speed Live WebSocket streaming connected successfully!")
+                if self._angel_subscribed:
+                    tokens_by_exch = {}
+                    for (exch_type, tok) in list(self._angel_subscribed):
+                        if exch_type not in tokens_by_exch:
+                            tokens_by_exch[exch_type] = []
+                        tokens_by_exch[exch_type].append(tok)
+                    token_list = [{"exchangeType": exch, "tokens": toks} for exch, toks in tokens_by_exch.items()]
+                    try:
+                        sws.subscribe("tradehub_resub", 3, token_list)
+                        log_message("INFO", f"Angel One WebSocket resubscribed {len(self._angel_subscribed)} tokens.")
+                    except Exception as e:
+                        log_message("WARNING", f"Angel One WebSocket resubscribe error: {e}")
+
+            def on_error(wsapp, error):
+                log_message("WARNING", f"Angel One Live WebSocket error: {error}")
+
+            def on_close(wsapp):
+                log_message("WARNING", "Angel One Live WebSocket connection closed.")
+
+            sws.on_data = on_data
+            sws.on_open = on_open
+            sws.on_error = on_error
+            sws.on_close = on_close
+
+            t = threading.Thread(target=sws.connect, daemon=True)
+            t.start()
+            self._angel_ticker = sws
+        except Exception as e:
+            log_message("WARNING", f"Could not start Angel One WebSocket Ticker: {e}")
 
     def _connect_angel_one(self, config, creds):
         api_key = creds.get("api_key", "").strip()
@@ -671,6 +813,7 @@ class UnifiedBrokerClient:
                     self.connected = True
                     self.mode = "REAL"
                     self.client_obj = obj
+                    self.start_angel_ticker(config, creds)
                     return True
                 else:
                     log_message("WARNING", "Cached Angel One tokens expired or invalid. Clearing tokens.json...")
@@ -733,6 +876,7 @@ class UnifiedBrokerClient:
                 self.connected = True
                 self.mode = "REAL"
                 self.client_obj = obj
+                self.start_angel_ticker(config, creds)
                 return True
             else:
                 err_msg = data.get("message", "Invalid API Key, MPIN or OTP/2FA PIN.")
@@ -1295,8 +1439,62 @@ class UnifiedBrokerClient:
             return {}
 
         if self.broker == "ANGEL_ONE" and isinstance(self.client_obj, SmartConnect):
-            res = self.client_obj.getMarketData(mode="FULL", exchangeTokens=exchange_tokens)
-            return extract_market_data(res)
+            EXCH_TYPE_MAP = {
+                "NSE": 1, "NSE_CM": 1,
+                "NFO": 2, "NSE_FO": 2,
+                "BSE": 3, "BSE_CM": 3,
+                "BFO": 4, "BSE_FO": 4,
+                "MCX": 5, "MCX_FO": 5
+            }
+
+            new_tokens_by_exch = {}
+            all_requested_tokens = []
+
+            for exch_str, tok_list in exchange_tokens.items():
+                exch_type = EXCH_TYPE_MAP.get(str(exch_str).upper(), 2)
+                for tok in tok_list:
+                    tok_str = str(tok).strip()
+                    all_requested_tokens.append(tok_str)
+                    if (exch_type, tok_str) not in self._angel_subscribed:
+                        if exch_type not in new_tokens_by_exch:
+                            new_tokens_by_exch[exch_type] = []
+                        new_tokens_by_exch[exch_type].append(tok_str)
+                        self._angel_subscribed.add((exch_type, tok_str))
+
+            if new_tokens_by_exch and hasattr(self, "_angel_ticker") and self._angel_ticker is not None:
+                token_list = [{"exchangeType": exch, "tokens": toks} for exch, toks in new_tokens_by_exch.items()]
+                try:
+                    self._angel_ticker.subscribe("tradehub_sub", 3, token_list)
+                    log_message("INFO", f"Subscribed Angel One Live WebSocket to tokens: {new_tokens_by_exch}")
+                except Exception as e:
+                    log_message("WARNING", f"Angel One WebSocket subscription failed: {e}")
+
+            result = {}
+            missing_tokens = []
+
+            for tok in all_requested_tokens:
+                tick = self._angel_ticks.get(tok)
+                if tick:
+                    result[tok] = tick
+                else:
+                    missing_tokens.append(tok)
+
+            if missing_tokens:
+                missing_exchange_tokens = {}
+                for exch_str, tok_list in exchange_tokens.items():
+                    sub_missing = [str(t) for t in tok_list if str(t) in missing_tokens]
+                    if sub_missing:
+                        missing_exchange_tokens[exch_str] = sub_missing
+                if missing_exchange_tokens:
+                    try:
+                        res = self.client_obj.getMarketData(mode="FULL", exchangeTokens=missing_exchange_tokens)
+                        rest_data = extract_market_data(res)
+                        result.update(rest_data)
+                        for tok_k, v in rest_data.items():
+                            self._angel_ticks[str(tok_k)] = v
+                    except Exception as e:
+                        log_message("WARNING", f"Angel One REST API fallback error: {e}")
+            return result
 
         elif self.broker == "ZERODHA" and self._kite_obj is not None:
             zerodha_instruments = self._get_zerodha_instruments(exchange_tokens)
@@ -2686,7 +2884,7 @@ def run_trading_engine_thread():
             for cc in active_sessions:
                 client_ctx.set(cc)
                 process_trading_tick()
-            time.sleep(0.5)
+            time.sleep(0.1)
         except Exception as e:
             log_message("ERROR", f"Engine loop error: {e}")
             time.sleep(1.0)
@@ -2733,7 +2931,9 @@ def process_trading_tick():
                             chunk = tokens[i:i+chunk_size]
                             chunk_data = state.unified_broker.get_market_data({exch: chunk})
                             market_data.update(chunk_data)
-                            time.sleep(0.4)  # Robust cooldown between rapid chunk requests to prevent rate limits!
+                            is_ws_active = bool(getattr(state.unified_broker, "_angel_ticker", None) or getattr(state.unified_broker, "_zerodha_ticker", None) or getattr(state.unified_broker, "_fyers_ticker", None))
+                            if not is_ws_active:
+                                time.sleep(0.4)  # Cooldown only for pure REST API polling
                 except Exception as e:
                     err_msg = str(e)
                     if "exceeding access rate" in err_msg.lower() or "access denied" in err_msg.lower() or "too many requests" in err_msg.lower():
@@ -2761,7 +2961,7 @@ def process_trading_tick():
                         strat["est_cost"] = None
                         strat["cost_per_share"] = None
                         strat["status"] = "Configure leg strikes below."
-                        return
+                        continue
                         
                     unconfigured_legs = [leg for leg in legs if not leg.get("token")]
                     if unconfigured_legs:
@@ -2773,7 +2973,7 @@ def process_trading_tick():
                         for leg in legs:
                             if not leg.get("token"):
                                 leg["status"] = leg.get("status") or "Strike not configured."
-                        return
+                        continue
                         
                     missing_tokens = [leg for leg in legs if leg.get("token") and leg["token"] not in market_data]
                     if missing_tokens:
@@ -2781,7 +2981,7 @@ def process_trading_tick():
                         for leg in legs:
                             if leg.get("token") and leg["token"] not in market_data:
                                 leg["status"] = "Waiting for live quotes..."
-                        return
+                        continue
                         
                     # 1. Update quotes and VWAP for all legs
                     for leg in legs:
@@ -2965,18 +3165,20 @@ def process_trading_tick():
                     else:
                         strat["status"] = "Live update active."
             
-            # Save recorded ticks to database outside the state lock
+            # Save recorded ticks to database asynchronously outside the state lock
             if ticks_to_save:
-                try:
-                    conn = sqlite3.connect(DATABASE_PATH)
-                    cursor = conn.cursor()
-                    cursor.executemany("INSERT INTO ticks (strategy_id, timestamp, buy_diff, sell_diff) VALUES (?, ?, ?, ?)", ticks_to_save)
-                    conn.commit()
-                    conn.close()
-                except Exception as db_err:
-                    log_message("WARNING", f"Failed to save ticks to database: {db_err}")
+                def _async_save_ticks(t_list):
+                    try:
+                        conn = sqlite3.connect(DATABASE_PATH)
+                        cursor = conn.cursor()
+                        cursor.executemany("INSERT INTO ticks (strategy_id, timestamp, buy_diff, sell_diff) VALUES (?, ?, ?, ?)", t_list)
+                        conn.commit()
+                        conn.close()
+                    except Exception as db_err:
+                        log_message("WARNING", f"Failed to save ticks to database: {db_err}")
+                threading.Thread(target=_async_save_ticks, args=(ticks_to_save,), daemon=True).start()
             
-            time.sleep(1.5)
+            time.sleep(0.05)
             
         except Exception as e:
             log_message("ERROR", f"Trading Engine loop caught exception: {e}")
