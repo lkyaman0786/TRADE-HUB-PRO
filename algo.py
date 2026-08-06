@@ -223,6 +223,13 @@ last_nifty_fetch_time = 0.0
 
 def get_nifty_live_price():
     global last_nifty_price, nifty_prev_close, last_nifty_fetch_time
+
+    # Direct instant readout from TrueData Live WebSocket if active
+    if state.unified_broker and getattr(state.unified_broker, "_truedata_ticker", None) is not None:
+        td_tick = state.unified_broker._truedata_ticks.get("NIFTY 50")
+        if td_tick and td_tick.get("ltp", 0) > 0:
+            last_nifty_price = float(td_tick["ltp"])
+
     now = time.time()
     if now - last_nifty_fetch_time > 0.25:
         last_nifty_fetch_time = now
@@ -289,10 +296,13 @@ class ScripMasterLookup:
     def __init__(self, filename="OpenAPIScripMaster.json"):
         self.filename = filename
         self.index = {}
+        self.token_index = {}
+        self.symbol_index = {}
         self.sorted_nfo_expiries = []
         self.sorted_mcx_expiries = []
         self.nfo_symbols = []
         self.mcx_symbols = []
+        self._max_expiry_by_symbol_month = {}
         self.load_and_index()
         
     def load_and_index(self):
@@ -437,7 +447,25 @@ class ScripMasterLookup:
                 
             self.nfo_symbols = sorted(list(nfo_symbols_set))
             self.mcx_symbols = sorted(list(mcx_symbols_set))
-    
+
+            # Precompute max expiry date per (name, year, month) for O(1) monthly/weekly determination
+            symbol_month_expiries = {}
+            for key, contract in self.index.items():
+                if len(key) >= 2:
+                    name = key[0]
+                    if len(key) >= 3 and isinstance(key[1], str):
+                        exp_str = key[1]
+                    else:
+                        continue
+                    try:
+                        exp_dt = datetime.strptime(exp_str, "%d%b%Y").date()
+                    except Exception:
+                        continue
+                    sm_key = (name.upper(), exp_dt.year, exp_dt.month)
+                    symbol_month_expiries.setdefault(sm_key, []).append(exp_dt)
+            for sm_key, dates in symbol_month_expiries.items():
+                self._max_expiry_by_symbol_month[sm_key] = max(dates)
+
             log_message("SUCCESS", f"Indexed {len(self.index)} contracts in {time.time()-t1:.2f} seconds.")
             log_message("INFO", f"Loaded {len(self.sorted_nfo_expiries)} NFO expiries and {len(self.sorted_mcx_expiries)} MCX expiries dynamically.")
             log_message("INFO", f"Gathered {len(self.nfo_symbols)} NFO symbols and {len(self.mcx_symbols)} MCX symbols successfully.")
@@ -605,10 +633,17 @@ class UnifiedBrokerClient:
         self._truedata_ticks = {}
         self._truedata_subscribed = set()
         self._truedata_ticker = None
+        self._td_symbol_cache = {}
         # Fyers WebSocket Ticker cache
         self._fyers_ticks = {}
         self._fyers_subscribed = set()
         self._fyers_ticker = None
+        self._fyers_symbol_cache = {}
+        # Zerodha symbol cache
+        self._zerodha_symbol_cache = {}
+        # Margin calculation cache
+        self._margin_cache = {}
+        self._last_margin_fetch_time = 0.0
         self.api_lock = threading.Lock()
 
     def connect(self, config):
@@ -680,6 +715,14 @@ class UnifiedBrokerClient:
             self._fyers_ticks.clear()
         if hasattr(self, "_fyers_subscribed"):
             self._fyers_subscribed.clear()
+        if hasattr(self, "_fyers_symbol_cache"):
+            self._fyers_symbol_cache.clear()
+        if hasattr(self, "_zerodha_symbol_cache"):
+            self._zerodha_symbol_cache.clear()
+        if hasattr(self, "_td_symbol_cache"):
+            self._td_symbol_cache.clear()
+        if hasattr(self, "_margin_cache"):
+            self._margin_cache.clear()
         log_message("WARNING", "Unified Broker Client disconnected.")
 
     def start_truedata_ticker(self, config=None, creds=None):
@@ -1590,8 +1633,19 @@ class UnifiedBrokerClient:
 
             if missing_tokens:
                 missing_exchange_tokens = {}
+                now_t = time.time()
                 for exch_str, tok_list in exchange_tokens.items():
-                    sub_missing = [str(t) for t in tok_list if str(t) in missing_tokens]
+                    sub_missing = []
+                    for t in tok_list:
+                        t_str = str(t)
+                        if t_str in missing_tokens:
+                            last_rest = getattr(self, "_last_rest_fetch", {}).get(t_str, 0)
+                            if now_t - last_rest > 5.0:
+                                sub_missing.append(t_str)
+                                if not hasattr(self, "_last_rest_fetch"):
+                                    self._last_rest_fetch = {}
+                                self._last_rest_fetch[t_str] = now_t
+
                     if sub_missing:
                         missing_exchange_tokens[exch_str] = sub_missing
                 if missing_exchange_tokens:
@@ -1695,7 +1749,7 @@ class UnifiedBrokerClient:
         mapping = {}
         if not lookup_engine:
             return mapping
-            
+
         td_index_names = {
             "NIFTY": "NIFTY 50",
             "BANKNIFTY": "NIFTY BANK",
@@ -1703,7 +1757,7 @@ class UnifiedBrokerClient:
             "MIDCPNIFTY": "NIFTY MID SELECT",
             "SENSEX": "SENSEX"
         }
-        
+
         spot_tokens = {
             "99926000": "NIFTY 50",
             "99926037": "NIFTY BANK",
@@ -1711,51 +1765,47 @@ class UnifiedBrokerClient:
             "99926002": "NIFTY MID SELECT",
             "99919000": "SENSEX"
         }
-            
+
         for exch, tokens in exchange_tokens.items():
             for token in tokens:
                 token_str = str(token).strip()
                 if token_str in spot_tokens:
                     mapping[token_str] = spot_tokens[token_str]
                     continue
-                    
+
+                if token_str in self._td_symbol_cache:
+                    mapping[token_str] = self._td_symbol_cache[token_str]
+                    continue
+
                 if not lookup_engine:
                     continue
-                    
-                found = False
-                for key, contract in lookup_engine.index.items():
-                    if contract["token"] == token_str:
-                        found = True
-                        if len(key) == 4:
-                            (name, expiry_norm, strike, opt_type) = key
-                        elif len(key) == 3:
-                            (name, expiry_norm, opt_type) = key
-                            strike = 0
-                        elif len(key) == 2:
-                            (name, opt_type) = key
-                            expiry_norm = ""
-                            strike = 0
-                        else:
-                            continue
 
-                        sym = contract.get("symbol", "")
-                        
-                        try:
-                            if opt_type == 'STOCK':
-                                sym = name
-                                if sym in td_index_names:
-                                    sym = td_index_names[sym]
-                            elif opt_type == 'FUT':
-                                dt = datetime.strptime(expiry_norm, "%d%b%Y")
-                                sym = f"{name}{dt.strftime('%y%b').upper()}FUT"
-                            else:
-                                dt = datetime.strptime(expiry_norm, "%d%b%Y")
-                                sym = f"{name}{dt.strftime('%y%m%d')}{int(strike)}{opt_type}"
-                        except Exception as e:
-                            pass
-                            
-                        mapping[token_str] = sym
-                        break
+                contract = lookup_engine.token_index.get(token_str)
+                if not contract:
+                    continue
+
+                name = contract.get("name", "")
+                expiry = contract.get("expiry", "")
+                strike = contract.get("strike", 0)
+                opt_type = contract.get("opt_type", "")
+                sym = contract.get("symbol", "")
+
+                try:
+                    if opt_type == 'STOCK':
+                        sym = name
+                        if sym in td_index_names:
+                            sym = td_index_names[sym]
+                    elif opt_type == 'FUT':
+                        dt = datetime.strptime(expiry, "%d%b%Y")
+                        sym = f"{name}{dt.strftime('%y%b').upper()}FUT"
+                    else:
+                        dt = datetime.strptime(expiry, "%d%b%Y")
+                        sym = f"{name}{dt.strftime('%y%m%d')}{int(strike)}{opt_type}"
+                except Exception:
+                    pass
+
+                self._td_symbol_cache[token_str] = sym
+                mapping[token_str] = sym
         return mapping
 
     def _get_fyers_symbols(self, exchange_tokens):
@@ -1765,69 +1815,55 @@ class UnifiedBrokerClient:
             return mapping
         for exch, tokens in exchange_tokens.items():
             for token in tokens:
-                for key, contract in lookup_engine.index.items():
-                    if contract["token"] == token:
-                        if len(key) == 4:
-                            (name, expiry_norm, strike, opt_type) = key
-                        elif len(key) == 3:
-                            (name, expiry_norm, opt_type) = key
-                            strike = 0
-                        elif len(key) == 2:
-                            (name, opt_type) = key
-                            expiry_norm = ""
-                            strike = 0
+                token_str = str(token).strip()
+                if token_str in self._fyers_symbol_cache:
+                    mapping[token] = self._fyers_symbol_cache[token_str]
+                    continue
+
+                contract = lookup_engine.token_index.get(token_str)
+                if not contract:
+                    continue
+
+                name = contract.get("name", "")
+                expiry = contract.get("expiry", "")
+                strike = contract.get("strike", 0)
+                opt_type = contract.get("opt_type", "")
+                fyers_exchange = "MCX" if exch == "MCX" else "NSE"
+
+                try:
+                    if opt_type == 'STOCK':
+                        sym = f"NSE:{name}-EQ"
+                    elif opt_type == 'FUT':
+                        dt = datetime.strptime(expiry, "%d%b%Y")
+                        yy = dt.strftime("%y")
+                        mmm = dt.strftime("%b").upper()
+                        sym = f"{fyers_exchange}:{name}{yy}{mmm}FUT"
+                    else:
+                        dt = datetime.strptime(expiry, "%d%b%Y")
+                        yy = dt.strftime("%y")
+
+                        is_monthly = True
+                        if fyers_exchange == "NSE" and name in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"):
+                            max_dt = lookup_engine._max_expiry_by_symbol_month.get((name.upper(), dt.year, dt.month))
+                            if max_dt and dt != max_dt:
+                                is_monthly = False
+
+                        if is_monthly:
+                            mmm = dt.strftime("%b").upper()
+                            sym = f"{fyers_exchange}:{name}{yy}{mmm}{int(strike)}{opt_type}"
                         else:
-                            continue
-                            
-                        try:
-                            fyers_exchange = "MCX" if exch == "MCX" else "NSE"
-                            if opt_type == 'STOCK':
-                                sym = f"NSE:{name}-EQ"
-                            elif opt_type == 'FUT':
-                                dt = datetime.strptime(expiry_norm, "%d%b%Y")
-                                yy = dt.strftime("%y")
-                                mmm = dt.strftime("%b").upper()
-                                sym = f"{fyers_exchange}:{name}{yy}{mmm}FUT"
-                            else:
-                                dt = datetime.strptime(expiry_norm, "%d%b%Y")
-                                yy = dt.strftime("%y")  # '26'
-                                
-                                # Determine if it's a monthly contract
-                                is_monthly = True
-                                if fyers_exchange == "NSE" and name in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"):
-                                    # Find all expiries in the same month/year for this symbol
-                                    month_expiries = []
-                                    current_month = dt.month
-                                    current_year = dt.year
-                                    for k in lookup_engine.index.keys():
-                                        k_name, k_expiry, k_strike, k_opt = k if len(k) == 4 else (None, None, None, None)
-                                        if k_name == name:
-                                            try:
-                                                k_dt = datetime.strptime(k_expiry, "%d%b%Y")
-                                                if k_dt.month == current_month and k_dt.year == current_year:
-                                                    month_expiries.append(k_dt)
-                                            except Exception:
-                                                continue
-                                    if month_expiries:
-                                        is_monthly = (dt == max(month_expiries))
-                                
-                                if is_monthly:
-                                    mmm = dt.strftime("%b").upper()  # 'JUN'
-                                    sym = f"{fyers_exchange}:{name}{yy}{mmm}{int(strike)}{opt_type}"
-                                else:
-                                    # Weekly contract format
-                                    m_code = str(dt.month)
-                                    if dt.month == 10: m_code = "O"
-                                    elif dt.month == 11: m_code = "N"
-                                    elif dt.month == 12: m_code = "D"
-                                    dd = dt.strftime("%d")  # '18'
-                                    sym = f"{fyers_exchange}:{name}{yy}{m_code}{dd}{int(strike)}{opt_type}"
-                        except Exception as e:
-                            log_message("WARNING", f"Error parsing Fyers symbol: {e}")
-                            sym = f"NSE:{name}{expiry_norm[:7]}{strike}{opt_type}"
-                            
-                        mapping[token] = sym
-                        break
+                            m_code = str(dt.month)
+                            if dt.month == 10: m_code = "O"
+                            elif dt.month == 11: m_code = "N"
+                            elif dt.month == 12: m_code = "D"
+                            dd = dt.strftime("%d")
+                            sym = f"{fyers_exchange}:{name}{yy}{m_code}{dd}{int(strike)}{opt_type}"
+                except Exception as e:
+                    log_message("WARNING", f"Error parsing Fyers symbol: {e}")
+                    sym = f"NSE:{name}{expiry[:7]}{strike}{opt_type}"
+
+                self._fyers_symbol_cache[token_str] = sym
+                mapping[token] = sym
         return mapping
 
     def _get_zerodha_instruments(self, exchange_tokens):
@@ -1837,74 +1873,60 @@ class UnifiedBrokerClient:
             return mapping
         for exch, tokens in exchange_tokens.items():
             for token in tokens:
-                for key, contract in lookup_engine.index.items():
-                    if contract["token"] == token:
-                        if len(key) == 4:
-                            (name, expiry_norm, strike, opt_type) = key
-                        elif len(key) == 3:
-                            (name, expiry_norm, opt_type) = key
-                            strike = 0
-                        elif len(key) == 2:
-                            (name, opt_type) = key
-                            expiry_norm = ""
-                            strike = 0
+                token_str = str(token).strip()
+                if token_str in self._zerodha_symbol_cache:
+                    mapping[token] = self._zerodha_symbol_cache[token_str]
+                    continue
+
+                contract = lookup_engine.token_index.get(token_str)
+                if not contract:
+                    continue
+
+                name = contract.get("name", "")
+                expiry = contract.get("expiry", "")
+                strike = contract.get("strike", 0)
+                opt_type = contract.get("opt_type", "")
+                zerodha_exchange = "MCX" if exch == "MCX" else "NFO"
+
+                try:
+                    if opt_type == 'STOCK':
+                        sym = f"NSE:{name}"
+                    elif opt_type == 'FUT':
+                        dt = datetime.strptime(expiry, "%d%b%Y")
+                        yy = dt.strftime("%y")
+                        mmm = dt.strftime("%b").upper()
+                        sym = f"{zerodha_exchange}:{name}{yy}{mmm}FUT"
+                    else:
+                        dt = datetime.strptime(expiry, "%d%b%Y")
+                        yy = dt.strftime("%y")
+
+                        if exch == "MCX":
+                            mmm = dt.strftime("%b").upper()
+                            sym = f"{zerodha_exchange}:{name}{yy}{mmm}{int(strike)}{opt_type}"
                         else:
-                            continue
-                            
-                        try:
-                            zerodha_exchange = "MCX" if exch == "MCX" else "NFO"
-                            if opt_type == 'STOCK':
-                                sym = f"NSE:{name}"
-                            elif opt_type == 'FUT':
-                                dt = datetime.strptime(expiry_norm, "%d%b%Y")
-                                yy = dt.strftime("%y")
+                            is_monthly = True
+                            if name in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"):
+                                max_dt = lookup_engine._max_expiry_by_symbol_month.get((name.upper(), dt.year, dt.month))
+                                if max_dt and dt != max_dt:
+                                    is_monthly = False
+
+                            if is_monthly:
                                 mmm = dt.strftime("%b").upper()
-                                sym = f"{zerodha_exchange}:{name}{yy}{mmm}FUT"
+                                sym = f"{zerodha_exchange}:{name}{yy}{mmm}{int(strike)}{opt_type}"
                             else:
-                                dt = datetime.strptime(expiry_norm, "%d%b%Y")
-                                yy = dt.strftime("%y")  # '26'
-                                
-                                if exch == "MCX":
-                                    mmm = dt.strftime("%b").upper()  # 'JUN'
-                                    sym = f"{zerodha_exchange}:{name}{yy}{mmm}{int(strike)}{opt_type}"
-                                else:
-                                    # Determine if it's a monthly contract
-                                    is_monthly = True
-                                    if name in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"):
-                                        # Find all expiries in the same month/year for this symbol
-                                        month_expiries = []
-                                        current_month = dt.month
-                                        current_year = dt.year
-                                        for k in lookup_engine.index.keys():
-                                            k_name, k_expiry, k_strike, k_opt = k if len(k) == 4 else (None, None, None, None)
-                                            if k_name == name:
-                                                try:
-                                                    k_dt = datetime.strptime(k_expiry, "%d%b%Y")
-                                                    if k_dt.month == current_month and k_dt.year == current_year:
-                                                        month_expiries.append(k_dt)
-                                                except Exception:
-                                                    continue
-                                        if month_expiries:
-                                            is_monthly = (dt == max(month_expiries))
-                                    
-                                    if is_monthly:
-                                        mmm = dt.strftime("%b").upper()  # 'JUN'
-                                        sym = f"{zerodha_exchange}:{name}{yy}{mmm}{int(strike)}{opt_type}"
-                                    else:
-                                        # Weekly contract format
-                                        m = dt.month
-                                        if m == 10: m_code = "O"
-                                        elif m == 11: m_code = "N"
-                                        elif m == 12: m_code = "D"
-                                        else: m_code = str(m)
-                                        dd = dt.strftime("%d")  # '18'
-                                        sym = f"{zerodha_exchange}:{name}{yy}{m_code}{dd}{int(strike)}{opt_type}"
-                        except Exception as e:
-                            log_message("WARNING", f"Error parsing Zerodha symbol: {e}")
-                            sym = f"NFO:{name}{expiry_norm[:7]}{strike}{opt_type}"
-                            
-                        mapping[token] = sym
-                        break
+                                m = dt.month
+                                if m == 10: m_code = "O"
+                                elif m == 11: m_code = "N"
+                                elif m == 12: m_code = "D"
+                                else: m_code = str(m)
+                                dd = dt.strftime("%d")
+                                sym = f"{zerodha_exchange}:{name}{yy}{m_code}{dd}{int(strike)}{opt_type}"
+                except Exception as e:
+                    log_message("WARNING", f"Error parsing Zerodha symbol: {e}")
+                    sym = f"NFO:{name}{expiry[:7]}{strike}{opt_type}"
+
+                self._zerodha_symbol_cache[token_str] = sym
+                mapping[token] = sym
         return mapping
 
     def get_funds(self):
@@ -2394,19 +2416,38 @@ class UnifiedBrokerClient:
     def calculate_strategy_margin(self, legs, strategy_lot=1.0):
         if not legs:
             return 0.0
+
+        cache_key_parts = [str(strategy_lot)]
+        for leg in legs:
+            cache_key_parts.append(str(leg.get("token", "")))
+            cache_key_parts.append(str(leg.get("ltp", "")))
+        cache_key = "|".join(cache_key_parts)
+
+        now = time.time()
+        if now - self._last_margin_fetch_time < 5.0:
+            cached = self._margin_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
         if self.connected:
             try:
                 if self.broker == "ANGEL_ONE" and isinstance(self.client_obj, SmartConnect):
                     margin = self._get_angel_one_margin(legs, strategy_lot)
                     if margin is not None:
+                        self._margin_cache[cache_key] = margin
+                        self._last_margin_fetch_time = now
                         return margin
                 elif self.broker == "ZERODHA" and self._kite_obj is not None:
                     margin = self._get_zerodha_margin(legs, strategy_lot)
                     if margin is not None:
+                        self._margin_cache[cache_key] = margin
+                        self._last_margin_fetch_time = now
                         return margin
                 elif self.broker == "FYERS" and self.client_obj is not None:
                     margin = self._get_fyers_margin(legs, strategy_lot)
                     if margin is not None:
+                        self._margin_cache[cache_key] = margin
+                        self._last_margin_fetch_time = now
                         return margin
             except Exception as e:
                 log_message("WARNING", f"Failed to fetch live margin from broker {self.broker}: {e}")
@@ -3777,6 +3818,7 @@ def get_state():
             pass
             
     with state_lock:
+        include_syms = request.args.get('include_symbols') == '1'
         state_dict = {
             "profile_name": state.unified_broker.profile["name"],
             "client_code": state.unified_broker.profile["client_code"],
@@ -3784,11 +3826,11 @@ def get_state():
             "connected": state.unified_broker.connected,
             "mode": state.unified_broker.mode,
             "strategies": state.active_strategies,
-            "logs": state.app_logs,
+            "logs": state.app_logs[-50:],
             "nfo_expiries": lookup_engine.sorted_nfo_expiries if lookup_engine else [],
             "mcx_expiries": lookup_engine.sorted_mcx_expiries if lookup_engine else [],
-            "nfo_symbols": lookup_engine.nfo_symbols if lookup_engine else [],
-            "mcx_symbols": lookup_engine.mcx_symbols if lookup_engine else [],
+            "nfo_symbols": (lookup_engine.nfo_symbols if lookup_engine else []) if include_syms else [],
+            "mcx_symbols": (lookup_engine.mcx_symbols if lookup_engine else []) if include_syms else [],
             "engine_running": state.engine_running,
             "funds": funds,
             "positions": [],

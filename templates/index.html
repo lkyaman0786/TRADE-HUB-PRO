@@ -1619,7 +1619,8 @@
         // Fetch application state periodically (LTP, orders, strategies)
         async function fetchAppState() {
             try {
-                const res = await fetch('/api/state');
+                const url = (!nfoSymbols || nfoSymbols.length === 0) ? '/api/state?include_symbols=1' : '/api/state';
+                const res = await fetch(url);
                 if (!res.ok) throw new Error('API server returned error');
                 const data = await res.json();
 
