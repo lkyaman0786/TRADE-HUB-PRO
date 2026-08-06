@@ -1555,10 +1555,14 @@ class UnifiedBrokerClient:
                     sym = td_mapping.get(tok)
                     if sym:
                         tick = self._truedata_ticks.get(sym)
+                        if tick and sym not in getattr(self, "_td_verified", set()):
+                            if not hasattr(self, "_td_verified"):
+                                self._td_verified = set()
+                            self._td_verified.add(sym)
+                            log_message("SUCCESS", f"TrueData providing Lightning-Fast rate for {sym}: {tick.get('ltp')}")
                         
-                # Temporarily disabled Angel One fallback to verify TrueData
-                # if not tick:
-                #     tick = self._angel_ticks.get(tok)
+                if not tick:
+                    tick = self._angel_ticks.get(tok)
                     
                 if tick:
                     result[tok] = tick
@@ -1680,11 +1684,29 @@ class UnifiedBrokerClient:
             "MIDCPNIFTY": "NIFTY MID SELECT",
             "SENSEX": "SENSEX"
         }
+        
+        spot_tokens = {
+            "99926000": "NIFTY 50",
+            "99926037": "NIFTY BANK",
+            "99926074": "NIFTY FIN SERVICE",
+            "99926002": "NIFTY MID SELECT",
+            "99919000": "SENSEX"
+        }
             
         for exch, tokens in exchange_tokens.items():
             for token in tokens:
+                token_str = str(token).strip()
+                if token_str in spot_tokens:
+                    mapping[token_str] = spot_tokens[token_str]
+                    continue
+                    
+                if not lookup_engine:
+                    continue
+                    
+                found = False
                 for key, contract in lookup_engine.index.items():
-                    if contract["token"] == str(token):
+                    if contract["token"] == token_str:
+                        found = True
                         if len(key) == 4:
                             (name, expiry_norm, strike, opt_type) = key
                         elif len(key) == 3:
@@ -1711,9 +1733,9 @@ class UnifiedBrokerClient:
                                 dt = datetime.strptime(expiry_norm, "%d%b%Y")
                                 sym = f"{name}{dt.strftime('%y%m%d')}{int(strike)}{opt_type}"
                         except Exception as e:
-                            log_message("WARNING", f"Error parsing TrueData symbol: {e}")
+                            pass
                             
-                        mapping[str(token)] = sym
+                        mapping[token_str] = sym
                         break
         return mapping
 
