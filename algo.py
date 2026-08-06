@@ -601,6 +601,10 @@ class UnifiedBrokerClient:
         self._angel_ticks = {}
         self._angel_subscribed = set()
         self._angel_ticker = None
+        # TrueData WebSocket Ticker cache
+        self._truedata_ticks = {}
+        self._truedata_subscribed = set()
+        self._truedata_ticker = None
         # Fyers WebSocket Ticker cache
         self._fyers_ticks = {}
         self._fyers_subscribed = set()
@@ -648,6 +652,14 @@ class UnifiedBrokerClient:
                 pass
             self._angel_ticker = None
             
+        # Stop TrueData WebSocket Ticker if running
+        if hasattr(self, "_truedata_ticker") and self._truedata_ticker is not None:
+            try:
+                self._truedata_ticker.disconnect()
+            except Exception:
+                pass
+            self._truedata_ticker = None
+            
         # Clean caches
         if hasattr(self, "_zerodha_ticks"):
             self._zerodha_ticks.clear()
@@ -659,11 +671,58 @@ class UnifiedBrokerClient:
             self._angel_ticks.clear()
         if hasattr(self, "_angel_subscribed"):
             self._angel_subscribed.clear()
+            
+        if hasattr(self, "_truedata_ticks"):
+            self._truedata_ticks.clear()
+        if hasattr(self, "_truedata_subscribed"):
+            self._truedata_subscribed.clear()
         if hasattr(self, "_fyers_ticks"):
             self._fyers_ticks.clear()
         if hasattr(self, "_fyers_subscribed"):
             self._fyers_subscribed.clear()
         log_message("WARNING", "Unified Broker Client disconnected.")
+
+    def start_truedata_ticker(self, config=None, creds=None):
+        """Initializes TrueData WebSocket Live Ticker Feed."""
+        if hasattr(self, "_truedata_ticker") and self._truedata_ticker is not None:
+            return
+
+        try:
+            from truedata_ws.websocket.TD import TD
+        except ImportError:
+            log_message("WARNING", "truedata_ws module not available. TrueData will not be used.")
+            return
+
+        td_user = "Trial123"
+        td_pass = "mohd123"
+        td_port = 8086
+
+        try:
+            log_message("INFO", "Initializing TrueData WebSocket Live Ticker Feed...")
+            td_obj = TD(td_user, td_pass, live_port=td_port)
+
+            @td_obj.trade_callback
+            def on_trade(msg):
+                try:
+                    symbol = msg.symbol
+                    if symbol:
+                        ltp = float(msg.ltp or 0.0)
+                        bid = float(msg.best_bid_price or ltp)
+                        ask = float(msg.best_ask_price or ltp)
+                        
+                        self._truedata_ticks[symbol] = {
+                            "ltp": ltp,
+                            "bid": bid,
+                            "ask": ask,
+                            "timestamp": time.time()
+                        }
+                except Exception as e:
+                    pass
+
+            self._truedata_ticker = td_obj
+            log_message("SUCCESS", "TrueData Live WebSocket initialized.")
+        except Exception as e:
+            log_message("WARNING", f"Could not start TrueData WebSocket Ticker: {e}")
 
     def start_angel_ticker(self, config=None, creds=None):
         """Initializes Angel One High-Speed SmartWebSocketV2 Live Ticker Feed."""
@@ -814,6 +873,7 @@ class UnifiedBrokerClient:
                     self.mode = "REAL"
                     self.client_obj = obj
                     self.start_angel_ticker(config, creds)
+                    self.start_truedata_ticker(config, creds)
                     return True
                 else:
                     log_message("WARNING", "Cached Angel One tokens expired or invalid. Clearing tokens.json...")
@@ -877,6 +937,7 @@ class UnifiedBrokerClient:
                 self.mode = "REAL"
                 self.client_obj = obj
                 self.start_angel_ticker(config, creds)
+                self.start_truedata_ticker(config, creds)
                 return True
             else:
                 err_msg = data.get("message", "Invalid API Key, MPIN or OTP/2FA PIN.")
@@ -1469,11 +1530,36 @@ class UnifiedBrokerClient:
                 except Exception as e:
                     log_message("WARNING", f"Angel One WebSocket subscription failed: {e}")
 
+            td_mapping = {}
+            if getattr(self, "_truedata_ticker", None) is not None:
+                td_mapping = self._get_truedata_symbols(exchange_tokens)
+                td_syms_to_sub = []
+                for tok_str, sym in td_mapping.items():
+                    if sym and sym not in self._truedata_subscribed:
+                        td_syms_to_sub.append(sym)
+                        self._truedata_subscribed.add(sym)
+                
+                if td_syms_to_sub:
+                    try:
+                        self._truedata_ticker.start_live_data(td_syms_to_sub)
+                        log_message("INFO", f"Subscribed TrueData WebSocket to tokens: {td_syms_to_sub}")
+                    except Exception as e:
+                        log_message("WARNING", f"TrueData WebSocket subscription failed: {e}")
+
             result = {}
             missing_tokens = []
 
             for tok in all_requested_tokens:
-                tick = self._angel_ticks.get(tok)
+                tick = None
+                if getattr(self, "_truedata_ticker", None) is not None:
+                    sym = td_mapping.get(tok)
+                    if sym:
+                        tick = self._truedata_ticks.get(sym)
+                        
+                # Temporarily disabled Angel One fallback to verify TrueData
+                # if not tick:
+                #     tick = self._angel_ticks.get(tok)
+                    
                 if tick:
                     result[tok] = tick
                 else:
@@ -1580,6 +1666,56 @@ class UnifiedBrokerClient:
 
         else:
             raise Exception(f"No live market data available for broker '{self.broker}'. Please ensure you are connected.")
+
+    def _get_truedata_symbols(self, exchange_tokens):
+        """Convert Angel One tokens to TrueData symbols."""
+        mapping = {}
+        if not lookup_engine:
+            return mapping
+            
+        td_index_names = {
+            "NIFTY": "NIFTY 50",
+            "BANKNIFTY": "NIFTY BANK",
+            "FINNIFTY": "NIFTY FIN SERVICE",
+            "MIDCPNIFTY": "NIFTY MID SELECT",
+            "SENSEX": "SENSEX"
+        }
+            
+        for exch, tokens in exchange_tokens.items():
+            for token in tokens:
+                for key, contract in lookup_engine.index.items():
+                    if contract["token"] == str(token):
+                        if len(key) == 4:
+                            (name, expiry_norm, strike, opt_type) = key
+                        elif len(key) == 3:
+                            (name, expiry_norm, opt_type) = key
+                            strike = 0
+                        elif len(key) == 2:
+                            (name, opt_type) = key
+                            expiry_norm = ""
+                            strike = 0
+                        else:
+                            continue
+
+                        sym = contract.get("symbol", "")
+                        
+                        try:
+                            if opt_type == 'STOCK':
+                                sym = name
+                                if sym in td_index_names:
+                                    sym = td_index_names[sym]
+                            elif opt_type == 'FUT':
+                                dt = datetime.strptime(expiry_norm, "%d%b%Y")
+                                sym = f"{name}{dt.strftime('%y%b').upper()}FUT"
+                            else:
+                                dt = datetime.strptime(expiry_norm, "%d%b%Y")
+                                sym = f"{name}{dt.strftime('%y%m%d')}{int(strike)}{opt_type}"
+                        except Exception as e:
+                            log_message("WARNING", f"Error parsing TrueData symbol: {e}")
+                            
+                        mapping[str(token)] = sym
+                        break
+        return mapping
 
     def _get_fyers_symbols(self, exchange_tokens):
         """Convert Angel One exchange_tokens dict to Fyers symbol strings."""

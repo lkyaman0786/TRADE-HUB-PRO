@@ -5,3 +5,4 @@ pyotp>=2.6.0
 smartapi-python
 fyers-apiv3
 kiteconnect
+truedata_ws
