@@ -710,25 +710,40 @@ class UnifiedBrokerClient:
                         bid = float(msg.best_bid_price or ltp)
                         ask = float(msg.best_ask_price or ltp)
                         
-                        # Log first 5 unique symbols received for debugging
-                        if not hasattr(on_trade, '_logged') or len(on_trade._logged) < 5:
-                            if not hasattr(on_trade, '_logged'):
-                                on_trade._logged = set()
-                            if symbol not in on_trade._logged:
-                                on_trade._logged.add(symbol)
-                                log_message("INFO", f"[TrueData] Raw tick received - Symbol='{symbol}', LTP={ltp}")
-                        
+                        existing = self._truedata_ticks.get(symbol, {})
                         self._truedata_ticks[symbol] = {
-                            "ltp": ltp,
-                            "bid": bid,
-                            "ask": ask,
+                            "ltp": ltp if ltp > 0 else existing.get("ltp", 0.0),
+                            "bid": bid if bid > 0 else existing.get("bid", ltp),
+                            "ask": ask if ask > 0 else existing.get("ask", ltp),
                             "timestamp": time.time()
                         }
-                except Exception as e:
+                except Exception:
+                    pass
+
+            @td_obj.bidask_callback
+            def on_bidask(msg):
+                try:
+                    symbol = msg.symbol
+                    if symbol:
+                        bid = float(msg.bid[0][0]) if (msg.bid and len(msg.bid) > 0 and msg.bid[0]) else 0.0
+                        ask = float(msg.ask[0][0]) if (msg.ask and len(msg.ask) > 0 and msg.ask[0]) else 0.0
+                        
+                        existing = self._truedata_ticks.get(symbol, {})
+                        curr_ltp = existing.get("ltp", 0.0)
+                        if curr_ltp == 0.0 and bid > 0:
+                            curr_ltp = round((bid + ask) / 2, 2) if ask > 0 else bid
+
+                        self._truedata_ticks[symbol] = {
+                            "ltp": curr_ltp,
+                            "bid": bid if bid > 0 else existing.get("bid", 0.0),
+                            "ask": ask if ask > 0 else existing.get("ask", 0.0),
+                            "timestamp": time.time()
+                        }
+                except Exception:
                     pass
 
             self._truedata_ticker = td_obj
-            log_message("SUCCESS", "TrueData Live WebSocket initialized.")
+            log_message("SUCCESS", "TrueData Live WebSocket initialized (Trades + Bid/Ask feeds active).")
         except Exception as e:
             log_message("WARNING", f"Could not start TrueData WebSocket Ticker: {e}")
 
