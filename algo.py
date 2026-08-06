@@ -3108,7 +3108,7 @@ def process_trading_tick():
                             chunk = tokens[i:i+chunk_size]
                             chunk_data = state.unified_broker.get_market_data({exch: chunk})
                             market_data.update(chunk_data)
-                            is_ws_active = bool(getattr(state.unified_broker, "_angel_ticker", None) or getattr(state.unified_broker, "_zerodha_ticker", None) or getattr(state.unified_broker, "_fyers_ticker", None))
+                            is_ws_active = bool(getattr(state.unified_broker, "_angel_ticker", None) or getattr(state.unified_broker, "_zerodha_ticker", None) or getattr(state.unified_broker, "_fyers_ticker", None) or getattr(state.unified_broker, "_truedata_ticker", None))
                             if not is_ws_active:
                                 time.sleep(0.4)  # Cooldown only for pure REST API polling
                 except Exception as e:
