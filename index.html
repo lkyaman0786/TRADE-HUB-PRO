@@ -2366,12 +2366,22 @@
             `;
         }
 
-        // Targeted DOM selective text diffing
+        // Targeted DOM selective text diffing with Live Price Flash Animation
         const updateText = (elId, text) => {
             const el = document.getElementById(elId);
             if (el) {
                 const strText = text !== null && text !== undefined ? String(text) : '--';
                 if (el.innerText !== strText) {
+                    if (el.innerText !== '--' && strText !== '--') {
+                        const oldVal = parseFloat(el.innerText);
+                        const newVal = parseFloat(strText);
+                        if (!isNaN(oldVal) && !isNaN(newVal) && oldVal !== newVal) {
+                            const flashColor = newVal > oldVal ? 'rgba(16, 185, 129, 0.4)' : 'rgba(239, 68, 68, 0.4)';
+                            el.style.transition = 'background-color 0.1s ease';
+                            el.style.backgroundColor = flashColor;
+                            setTimeout(() => { el.style.backgroundColor = 'transparent'; }, 300);
+                        }
+                    }
                     el.innerText = strText;
                 }
             }
