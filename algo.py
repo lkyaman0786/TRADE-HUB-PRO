@@ -895,7 +895,7 @@ class UnifiedBrokerClient:
                     self.connected = True
                     self.mode = "REAL"
                     self.client_obj = obj
-                    self.start_angel_ticker(config, creds)
+                    # self.start_angel_ticker(config, creds)  # Disabled to enforce pure TrueData WebSocket
                     self.start_truedata_ticker(config, creds)
                     return True
                 else:
@@ -959,7 +959,7 @@ class UnifiedBrokerClient:
                 self.connected = True
                 self.mode = "REAL"
                 self.client_obj = obj
-                self.start_angel_ticker(config, creds)
+                # self.start_angel_ticker(config, creds)  # Disabled to enforce pure TrueData WebSocket
                 self.start_truedata_ticker(config, creds)
                 return True
             else:
@@ -1578,14 +1578,10 @@ class UnifiedBrokerClient:
                     sym = td_mapping.get(tok)
                     if sym:
                         tick = self._truedata_ticks.get(sym)
-                        if tick and sym not in getattr(self, "_td_verified", set()):
-                            if not hasattr(self, "_td_verified"):
-                                self._td_verified = set()
-                            self._td_verified.add(sym)
-                            log_message("SUCCESS", f"TrueData providing Lightning-Fast rate for {sym}: {tick.get('ltp')}")
                         
-                if not tick:
-                    tick = self._angel_ticks.get(tok)
+                # Angel One fallback strictly disabled as requested
+                # if not tick:
+                #     tick = self._angel_ticks.get(tok)
                     
                 if tick:
                     result[tok] = tick
