@@ -224,7 +224,7 @@ last_nifty_fetch_time = 0.0
 def get_nifty_live_price():
     global last_nifty_price, nifty_prev_close, last_nifty_fetch_time
     now = time.time()
-    if now - last_nifty_fetch_time > 1.0:
+    if now - last_nifty_fetch_time > 0.25:
         last_nifty_fetch_time = now
         if state.unified_broker and state.unified_broker.connected:
             try:
@@ -709,6 +709,14 @@ class UnifiedBrokerClient:
                         ltp = float(msg.ltp or 0.0)
                         bid = float(msg.best_bid_price or ltp)
                         ask = float(msg.best_ask_price or ltp)
+                        
+                        # Log first 5 unique symbols received for debugging
+                        if not hasattr(on_trade, '_logged') or len(on_trade._logged) < 5:
+                            if not hasattr(on_trade, '_logged'):
+                                on_trade._logged = set()
+                            if symbol not in on_trade._logged:
+                                on_trade._logged.add(symbol)
+                                log_message("INFO", f"[TrueData] Raw tick received - Symbol='{symbol}', LTP={ltp}")
                         
                         self._truedata_ticks[symbol] = {
                             "ltp": ltp,
