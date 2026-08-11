@@ -224,11 +224,11 @@ last_nifty_fetch_time = 0.0
 def get_nifty_live_price():
     global last_nifty_price, nifty_prev_close, last_nifty_fetch_time
 
-    # Direct instant readout from TrueData Live WebSocket if active
-    if state.unified_broker and getattr(state.unified_broker, "_truedata_ticker", None) is not None:
-        td_tick = state.unified_broker._truedata_ticks.get("NIFTY 50")
-        if td_tick and td_tick.get("ltp", 0) > 0:
-            last_nifty_price = float(td_tick["ltp"])
+    # Direct instant readout from Angel One Live WebSocket if active
+    if state.unified_broker and getattr(state.unified_broker, "_angel_ticker", None) is not None:
+        angel_tick = state.unified_broker._angel_ticks.get("99926000")
+        if angel_tick and angel_tick.get("ltp", 0) > 0:
+            last_nifty_price = float(angel_tick["ltp"])
 
     now = time.time()
     if now - last_nifty_fetch_time > 0.25:
@@ -629,11 +629,6 @@ class UnifiedBrokerClient:
         self._angel_ticks = {}
         self._angel_subscribed = set()
         self._angel_ticker = None
-        # TrueData WebSocket Ticker cache
-        self._truedata_ticks = {}
-        self._truedata_subscribed = set()
-        self._truedata_ticker = None
-        self._td_symbol_cache = {}
         # Fyers WebSocket Ticker cache
         self._fyers_ticks = {}
         self._fyers_subscribed = set()
@@ -687,14 +682,7 @@ class UnifiedBrokerClient:
                 pass
             self._angel_ticker = None
             
-        # Stop TrueData WebSocket Ticker if running
-        if hasattr(self, "_truedata_ticker") and self._truedata_ticker is not None:
-            try:
-                self._truedata_ticker.disconnect()
-            except Exception:
-                pass
-            self._truedata_ticker = None
-            
+
         # Clean caches
         if hasattr(self, "_zerodha_ticks"):
             self._zerodha_ticks.clear()
@@ -707,10 +695,6 @@ class UnifiedBrokerClient:
         if hasattr(self, "_angel_subscribed"):
             self._angel_subscribed.clear()
             
-        if hasattr(self, "_truedata_ticks"):
-            self._truedata_ticks.clear()
-        if hasattr(self, "_truedata_subscribed"):
-            self._truedata_subscribed.clear()
         if hasattr(self, "_fyers_ticks"):
             self._fyers_ticks.clear()
         if hasattr(self, "_fyers_subscribed"):
@@ -719,76 +703,9 @@ class UnifiedBrokerClient:
             self._fyers_symbol_cache.clear()
         if hasattr(self, "_zerodha_symbol_cache"):
             self._zerodha_symbol_cache.clear()
-        if hasattr(self, "_td_symbol_cache"):
-            self._td_symbol_cache.clear()
         if hasattr(self, "_margin_cache"):
             self._margin_cache.clear()
         log_message("WARNING", "Unified Broker Client disconnected.")
-
-    def start_truedata_ticker(self, config=None, creds=None):
-        """Initializes TrueData WebSocket Live Ticker Feed."""
-        if hasattr(self, "_truedata_ticker") and self._truedata_ticker is not None:
-            return
-
-        try:
-            from truedata_ws.websocket.TD import TD
-        except ImportError:
-            log_message("WARNING", "truedata_ws module not available. TrueData will not be used.")
-            return
-
-        td_user = "Trial123"
-        td_pass = "mohd123"
-        td_port = 8086
-
-        try:
-            log_message("INFO", "Initializing TrueData WebSocket Live Ticker Feed...")
-            td_obj = TD(td_user, td_pass, live_port=td_port)
-
-            @td_obj.trade_callback
-            def on_trade(msg):
-                try:
-                    symbol = msg.symbol
-                    if symbol:
-                        ltp = float(msg.ltp or 0.0)
-                        bid = float(msg.best_bid_price or ltp)
-                        ask = float(msg.best_ask_price or ltp)
-                        
-                        existing = self._truedata_ticks.get(symbol, {})
-                        self._truedata_ticks[symbol] = {
-                            "ltp": ltp if ltp > 0 else existing.get("ltp", 0.0),
-                            "bid": bid if bid > 0 else existing.get("bid", ltp),
-                            "ask": ask if ask > 0 else existing.get("ask", ltp),
-                            "timestamp": time.time()
-                        }
-                except Exception:
-                    pass
-
-            @td_obj.bidask_callback
-            def on_bidask(msg):
-                try:
-                    symbol = msg.symbol
-                    if symbol:
-                        bid = float(msg.bid[0][0]) if (msg.bid and len(msg.bid) > 0 and msg.bid[0]) else 0.0
-                        ask = float(msg.ask[0][0]) if (msg.ask and len(msg.ask) > 0 and msg.ask[0]) else 0.0
-                        
-                        existing = self._truedata_ticks.get(symbol, {})
-                        curr_ltp = existing.get("ltp", 0.0)
-                        if curr_ltp == 0.0 and bid > 0:
-                            curr_ltp = round((bid + ask) / 2, 2) if ask > 0 else bid
-
-                        self._truedata_ticks[symbol] = {
-                            "ltp": curr_ltp,
-                            "bid": bid if bid > 0 else existing.get("bid", 0.0),
-                            "ask": ask if ask > 0 else existing.get("ask", 0.0),
-                            "timestamp": time.time()
-                        }
-                except Exception:
-                    pass
-
-            self._truedata_ticker = td_obj
-            log_message("SUCCESS", "TrueData Live WebSocket initialized (Trades + Bid/Ask feeds active).")
-        except Exception as e:
-            log_message("WARNING", f"Could not start TrueData WebSocket Ticker: {e}")
 
     def start_angel_ticker(self, config=None, creds=None):
         """Initializes Angel One High-Speed SmartWebSocketV2 Live Ticker Feed."""
@@ -856,17 +773,23 @@ class UnifiedBrokerClient:
                 bid = buy_list[0]["price"] if buy_list else ltp
                 ask = sell_list[0]["price"] if sell_list else ltp
 
+                existing = self._angel_ticks.get(token, {})
+                final_ltp = ltp if ltp > 0 else existing.get("ltp", 0.0)
+                final_bid = bid if bid > 0 else existing.get("bid", final_ltp)
+                final_ask = ask if ask > 0 else existing.get("ask", final_ltp)
+
                 self._angel_ticks[token] = {
-                    "ltp": ltp,
-                    "bid": bid or ltp,
-                    "ask": ask or ltp,
-                    "buy_depth": buy_list,
-                    "sell_depth": sell_list,
+                    "ltp": final_ltp,
+                    "bid": final_bid,
+                    "ask": final_ask,
+                    "buy_depth": buy_list or existing.get("buy_depth", []),
+                    "sell_depth": sell_list or existing.get("sell_depth", []),
                     "timestamp": time.time()
                 }
 
             def on_open(wsapp):
                 log_message("SUCCESS", "Angel One High-Speed Live WebSocket streaming connected successfully!")
+                self._angel_subscribed.add((1, "99926000"))
                 if self._angel_subscribed:
                     tokens_by_exch = {}
                     for (exch_type, tok) in list(self._angel_subscribed):
@@ -938,8 +861,7 @@ class UnifiedBrokerClient:
                     self.connected = True
                     self.mode = "REAL"
                     self.client_obj = obj
-                    # self.start_angel_ticker(config, creds)  # Disabled to enforce pure TrueData WebSocket
-                    self.start_truedata_ticker(config, creds)
+                    self.start_angel_ticker(config, creds)
                     return True
                 else:
                     log_message("WARNING", "Cached Angel One tokens expired or invalid. Clearing tokens.json...")
@@ -1002,8 +924,7 @@ class UnifiedBrokerClient:
                 self.connected = True
                 self.mode = "REAL"
                 self.client_obj = obj
-                # self.start_angel_ticker(config, creds)  # Disabled to enforce pure TrueData WebSocket
-                self.start_truedata_ticker(config, creds)
+                self.start_angel_ticker(config, creds)
                 return True
             else:
                 err_msg = data.get("message", "Invalid API Key, MPIN or OTP/2FA PIN.")
@@ -1574,7 +1495,7 @@ class UnifiedBrokerClient:
                 "MCX": 5, "MCX_FO": 5
             }
 
-            new_tokens_by_exch = {}
+            tokens_to_sub_by_exch = {}
             all_requested_tokens = []
 
             for exch_str, tok_list in exchange_tokens.items():
@@ -1583,49 +1504,26 @@ class UnifiedBrokerClient:
                     tok_str = str(tok).strip()
                     all_requested_tokens.append(tok_str)
                     if (exch_type, tok_str) not in self._angel_subscribed:
-                        if exch_type not in new_tokens_by_exch:
-                            new_tokens_by_exch[exch_type] = []
-                        new_tokens_by_exch[exch_type].append(tok_str)
-                        self._angel_subscribed.add((exch_type, tok_str))
+                        if exch_type not in tokens_to_sub_by_exch:
+                            tokens_to_sub_by_exch[exch_type] = []
+                        tokens_to_sub_by_exch[exch_type].append(tok_str)
 
-            if new_tokens_by_exch and hasattr(self, "_angel_ticker") and self._angel_ticker is not None:
-                token_list = [{"exchangeType": exch, "tokens": toks} for exch, toks in new_tokens_by_exch.items()]
+            if tokens_to_sub_by_exch and hasattr(self, "_angel_ticker") and self._angel_ticker is not None:
+                token_list = [{"exchangeType": exch, "tokens": toks} for exch, toks in tokens_to_sub_by_exch.items()]
                 try:
                     self._angel_ticker.subscribe("tradehub_sub", 3, token_list)
-                    log_message("INFO", f"Subscribed Angel One Live WebSocket to tokens: {new_tokens_by_exch}")
-                except Exception as e:
-                    log_message("WARNING", f"Angel One WebSocket subscription failed: {e}")
-
-            td_mapping = {}
-            if getattr(self, "_truedata_ticker", None) is not None:
-                td_mapping = self._get_truedata_symbols(exchange_tokens)
-                td_syms_to_sub = []
-                for tok_str, sym in td_mapping.items():
-                    if sym and sym not in self._truedata_subscribed:
-                        td_syms_to_sub.append(sym)
-                        self._truedata_subscribed.add(sym)
-                
-                if td_syms_to_sub:
-                    try:
-                        self._truedata_ticker.start_live_data(td_syms_to_sub)
-                        log_message("INFO", f"Subscribed TrueData WebSocket to tokens: {td_syms_to_sub}")
-                    except Exception as e:
-                        log_message("WARNING", f"TrueData WebSocket subscription failed: {e}")
+                    for exch, toks in tokens_to_sub_by_exch.items():
+                        for tok_str in toks:
+                            self._angel_subscribed.add((exch, tok_str))
+                    log_message("INFO", f"Subscribed Angel One Live WebSocket to tokens: {tokens_to_sub_by_exch}")
+                except Exception:
+                    log_message("WARNING", "Angel One WebSocket subscription pending connect... (will retry next tick)")
 
             result = {}
             missing_tokens = []
 
             for tok in all_requested_tokens:
-                tick = None
-                if getattr(self, "_truedata_ticker", None) is not None:
-                    sym = td_mapping.get(tok)
-                    if sym:
-                        tick = self._truedata_ticks.get(sym)
-                        
-                # Angel One fallback strictly disabled as requested
-                # if not tick:
-                #     tick = self._angel_ticks.get(tok)
-                    
+                tick = self._angel_ticks.get(tok)
                 if tick:
                     result[tok] = tick
                 else:
@@ -1640,7 +1538,7 @@ class UnifiedBrokerClient:
                         t_str = str(t)
                         if t_str in missing_tokens:
                             last_rest = getattr(self, "_last_rest_fetch", {}).get(t_str, 0)
-                            if now_t - last_rest > 5.0:
+                            if now_t - last_rest > 0.5:
                                 sub_missing.append(t_str)
                                 if not hasattr(self, "_last_rest_fetch"):
                                     self._last_rest_fetch = {}
@@ -1743,70 +1641,6 @@ class UnifiedBrokerClient:
 
         else:
             raise Exception(f"No live market data available for broker '{self.broker}'. Please ensure you are connected.")
-
-    def _get_truedata_symbols(self, exchange_tokens):
-        """Convert Angel One tokens to TrueData symbols."""
-        mapping = {}
-        if not lookup_engine:
-            return mapping
-
-        td_index_names = {
-            "NIFTY": "NIFTY 50",
-            "BANKNIFTY": "NIFTY BANK",
-            "FINNIFTY": "NIFTY FIN SERVICE",
-            "MIDCPNIFTY": "NIFTY MID SELECT",
-            "SENSEX": "SENSEX"
-        }
-
-        spot_tokens = {
-            "99926000": "NIFTY 50",
-            "99926037": "NIFTY BANK",
-            "99926074": "NIFTY FIN SERVICE",
-            "99926002": "NIFTY MID SELECT",
-            "99919000": "SENSEX"
-        }
-
-        for exch, tokens in exchange_tokens.items():
-            for token in tokens:
-                token_str = str(token).strip()
-                if token_str in spot_tokens:
-                    mapping[token_str] = spot_tokens[token_str]
-                    continue
-
-                if token_str in self._td_symbol_cache:
-                    mapping[token_str] = self._td_symbol_cache[token_str]
-                    continue
-
-                if not lookup_engine:
-                    continue
-
-                contract = lookup_engine.token_index.get(token_str)
-                if not contract:
-                    continue
-
-                name = contract.get("name", "")
-                expiry = contract.get("expiry", "")
-                strike = contract.get("strike", 0)
-                opt_type = contract.get("opt_type", "")
-                sym = contract.get("symbol", "")
-
-                try:
-                    if opt_type == 'STOCK':
-                        sym = name
-                        if sym in td_index_names:
-                            sym = td_index_names[sym]
-                    elif opt_type == 'FUT':
-                        dt = datetime.strptime(expiry, "%d%b%Y")
-                        sym = f"{name}{dt.strftime('%y%b').upper()}FUT"
-                    else:
-                        dt = datetime.strptime(expiry, "%d%b%Y")
-                        sym = f"{name}{dt.strftime('%y%m%d')}{int(strike)}{opt_type}"
-                except Exception:
-                    pass
-
-                self._td_symbol_cache[token_str] = sym
-                mapping[token_str] = sym
-        return mapping
 
     def _get_fyers_symbols(self, exchange_tokens):
         """Convert Angel One exchange_tokens dict to Fyers symbol strings."""
@@ -3149,7 +2983,7 @@ def process_trading_tick():
                             chunk = tokens[i:i+chunk_size]
                             chunk_data = state.unified_broker.get_market_data({exch: chunk})
                             market_data.update(chunk_data)
-                            is_ws_active = bool(getattr(state.unified_broker, "_angel_ticker", None) or getattr(state.unified_broker, "_zerodha_ticker", None) or getattr(state.unified_broker, "_fyers_ticker", None) or getattr(state.unified_broker, "_truedata_ticker", None))
+                            is_ws_active = bool(getattr(state.unified_broker, "_angel_ticker", None) or getattr(state.unified_broker, "_zerodha_ticker", None) or getattr(state.unified_broker, "_fyers_ticker", None))
                             if not is_ws_active:
                                 time.sleep(0.4)  # Cooldown only for pure REST API polling
                 except Exception as e:
