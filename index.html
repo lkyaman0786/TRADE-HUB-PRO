@@ -631,8 +631,11 @@
     <!-- 2. MAIN TRADING WORKSPACE APP SCREEN (app-screen) -->
     <div id="app-screen" class="hidden flex-1 flex h-screen overflow-hidden">
         
+        <!-- Sidebar Backdrop Overlay (Mobile) -->
+        <div id="sidebar-backdrop" class="fixed inset-0 bg-black/50 z-40 hidden md:hidden" onclick="toggleSidebar()"></div>
+
         <!-- Left Sidebar Navigation -->
-        <aside class="w-64 border-r border-outline-variant/20 bg-surface-container-low flex flex-col h-full shrink-0">
+        <aside id="app-sidebar" class="fixed inset-y-0 left-0 z-50 w-64 transform -translate-x-full md:relative md:translate-x-0 transition-transform duration-300 ease-in-out border-r border-outline-variant/20 bg-surface-container-low flex flex-col h-full shrink-0">
             <!-- Sidebar Header Brand -->
             <div class="p-6 border-b border-outline-variant/10">
                 <div class="flex items-center gap-2">
@@ -700,8 +703,11 @@
             <!-- Top App Bar -->
             <header class="h-16 px-margin-edge border-b border-outline-variant/20 bg-surface-container-low flex justify-between items-center shrink-0">
                 <!-- Top Left: Heading details -->
-                <div class="flex items-center gap-4">
-                    <h2 id="top-bar-view-title" class="font-display font-bold text-sm tracking-wide text-on-surface uppercase">Dashboard Overview</h2>
+                <div class="flex items-center gap-2 md:gap-4">
+                    <button class="md:hidden text-on-surface" onclick="toggleSidebar()">
+                        <span class="material-symbols-outlined">menu</span>
+                    </button>
+                    <h2 id="top-bar-view-title" class="font-display font-bold text-sm tracking-wide text-on-surface uppercase truncate">Dashboard Overview</h2>
                     <span id="navbar-theme-label" class="text-[10px] font-semibold text-primary uppercase tracking-widest bg-primary/5 px-2.5 py-0.5 rounded border border-primary/15 hidden md:inline-block">Theme Active</span>
                 </div>
 
@@ -727,16 +733,16 @@
                     </div>
 
                     <!-- Emergency stop button -->
-                    <button onclick="triggerPanicStop()" class="bg-error-container/20 hover:bg-error-container/40 text-error border border-error/20 px-3.5 py-1.5 rounded-lg font-display font-bold text-[10px] flex items-center gap-1.5 transition-all">
+                    <button onclick="triggerPanicStop()" class="bg-error-container/20 hover:bg-error-container/40 text-error border border-error/20 px-3.5 py-1.5 rounded-lg font-display font-bold text-[10px] flex items-center justify-center gap-1.5 transition-all" title="EMERGENCY STOP">
                         <span class="material-symbols-outlined text-sm">emergency_home</span>
-                        EMERGENCY STOP
+                        <span class="hidden xl:inline">EMERGENCY STOP</span>
                     </button>
 
                     <!-- Profile and Engine controllers -->
                     <div class="flex items-center gap-3">
-                        <button id="btn-engine-toggle" onclick="toggleEngine()" class="px-3.5 py-1.5 bg-primary text-white font-display font-bold text-[10px] rounded-lg shadow-lg shadow-primary/10 hover:bg-primary/90 flex items-center gap-1.5 transition-all">
+                        <button id="btn-engine-toggle" onclick="toggleEngine()" class="px-3.5 py-1.5 bg-primary text-white font-display font-bold text-[10px] rounded-lg shadow-lg shadow-primary/10 hover:bg-primary/90 flex items-center justify-center gap-1.5 transition-all" title="START ENGINE">
                             <span class="material-symbols-outlined text-sm">play_arrow</span>
-                            START ENGINE
+                            <span class="hidden xl:inline">START ENGINE</span>
                         </button>
                     </div>
                 </div>
@@ -809,7 +815,7 @@
                 <!-- SECTION 2: STRATEGIES VIEW (Main Option Spreads Builder) -->
                 <div id="sec-strategies" class="view-section hidden space-y-6">
                     <!-- Toolbar header actions -->
-                    <div class="flex justify-between items-center bg-surface-container-low/40 p-4 rounded-lg border border-outline-variant/20">
+                    <div class="flex flex-col xl:flex-row justify-between items-center gap-4 bg-surface-container-low/40 p-4 rounded-lg border border-outline-variant/20">
                         <!-- Exchange Segments switcher tabs -->
                         <div class="flex gap-1.5 p-1 bg-surface-container rounded-lg border border-outline-variant/20">
                             <button id="tab-nfo" onclick="switchSegment('NFO')" class="px-4 py-1.5 rounded font-display font-bold text-[10px] uppercase text-on-surface bg-primary/15 border border-primary/20">NFO (Index & Stock)</button>
@@ -825,7 +831,7 @@
                         </div>
                         
                         <!-- Add Strategy trigger -->
-                        <div class="flex gap-2">
+                        <div class="flex flex-wrap justify-center gap-2">
                             <button onclick="importAllPositionsFromBroker(this)" class="px-5 py-2 bg-secondary text-white font-display font-bold text-[10px] rounded-lg shadow-lg shadow-secondary/10 hover:bg-secondary/90 flex items-center gap-1.5 transition-all" title="Import/sync all open broker positions as strategy spreads">
                                 <span class="material-symbols-outlined text-sm">download</span>
                                 IMPORT FROM BROKER
@@ -4301,6 +4307,16 @@
                 messagesDiv.appendChild(botMsgDiv);
                 messagesDiv.scrollTop = messagesDiv.scrollHeight;
             });
+        }
+
+        // Toggle Sidebar for Mobile
+        function toggleSidebar() {
+            const sidebar = document.getElementById('app-sidebar');
+            const backdrop = document.getElementById('sidebar-backdrop');
+            if (sidebar && backdrop) {
+                sidebar.classList.toggle('-translate-x-full');
+                backdrop.classList.toggle('hidden');
+            }
         }
     </script>
 
