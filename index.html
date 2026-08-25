@@ -2222,13 +2222,13 @@
                     </div>
 
                     <!-- Strategy footer message -->
-                    <div class="flex justify-between items-center text-[10px] text-on-surface-variant font-semibold bg-surface-container-lowest/30 px-2.5 py-1.5 rounded">
-                        <div class="flex items-center gap-2">
+                    <div class="flex flex-col xl:flex-row justify-between xl:items-center gap-3 text-[10px] text-on-surface-variant font-semibold bg-surface-container-lowest/30 px-2.5 py-2 rounded">
+                        <div class="flex items-center gap-2 shrink-0">
                             <span class="strat-log-icon active" id="span-icon-${h_row}"></span>
                             <span id="span-status-${h_row}">${strat.status || 'Live active.'}</span>
                         </div>
 
-                        <div class="flex gap-3 text-xs font-bold">
+                        <div class="flex flex-wrap gap-2 text-xs font-bold w-full xl:w-auto xl:justify-end">
                             <span id="badge-cost-container-${h_row}" class="bg-primary/10 text-primary border border-primary/35 rounded px-2.5 py-1 shadow-sm" title="Total Cost: ${strat.est_cost !== null && strat.est_cost !== undefined ? formatRupee(strat.est_cost) : '₹--'}">
                                 COST: <span id="badge-costval-${h_row}" class="font-extrabold text-[12px]">${strat.cost_per_share !== null && strat.cost_per_share !== undefined ? formatPerShareCost(strat.cost_per_share) : '--'}</span>
                             </span>

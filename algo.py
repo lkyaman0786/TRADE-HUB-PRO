@@ -2935,6 +2935,9 @@ def run_trading_engine_thread():
                 
             for cc in active_sessions:
                 client_ctx.set(cc)
+                cfg = load_client_config()
+                if cfg and not cfg.get('is_active', True):
+                    continue
                 process_trading_tick()
             time.sleep(0.1)
         except Exception as e:
@@ -4804,6 +4807,7 @@ def admin_data():
         client_name = "Unknown"
         client_mobile = "Unknown"
         client_broker = "Unknown"
+        client_is_active = True
         
         cfg_file = get_client_file_path(f"client_config_{cc}.json" if cc != 'DEFAULT' else "client_config.json")
         if not os.path.exists(cfg_file):
@@ -4815,6 +4819,7 @@ def admin_data():
                     client_name = cfg.get('client_name', 'Unknown')
                     client_mobile = cfg.get('client_mobile', 'Unknown')
                     client_broker = cfg.get('selected_broker', 'Unknown')
+                    client_is_active = cfg.get('is_active', True)
             except:
                 pass
                 
@@ -4864,6 +4869,7 @@ def admin_data():
             "name": client_name,
             "mobile": client_mobile,
             "broker_name": client_broker,
+            "is_active": client_is_active,
             "status": broker_status,
             "strategies_count": active_strats_count,
             "overall_pnl": round(pnl, 2),
@@ -4872,7 +4878,36 @@ def admin_data():
         
     return jsonify(admin_state)
 
+@app.route('/api/admin/toggle_client', methods=['POST'])
+def admin_toggle_client():
+    if request.headers.get('X-Admin-Token') != "admin_master_token_777":
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    
+    data = request.json
+    cc = data.get("client_code")
+    is_active = data.get("is_active")
+    
+    if cc is None or is_active is None:
+        return jsonify({"status": "error", "message": "Missing parameters"}), 400
+        
+    cfg_file = get_client_file_path(f"client_config_{cc}.json" if cc != 'DEFAULT' else "client_config.json")
+    if not os.path.exists(cfg_file):
+        cfg_file = f"client_config_{cc}.json" if cc != 'DEFAULT' else "client_config.json"
+        
+    if os.path.exists(cfg_file):
+        try:
+            with open(cfg_file, 'r') as cf:
+                cfg = json.load(cf)
+            cfg['is_active'] = is_active
+            with open(cfg_file, 'w') as cf:
+                json.dump(cfg, cf, indent=4)
+            return jsonify({"status": "success", "message": f"Client {cc} subscription updated to {'active' if is_active else 'inactive'}."})
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
+    else:
+        return jsonify({"status": "error", "message": "Client config not found"}), 404
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     print(f"\n[INFO] Starting Flask Backend Server on http://127.0.0.1:{port} ...\n")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=False)
