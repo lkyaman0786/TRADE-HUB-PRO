@@ -3282,6 +3282,13 @@ app = Flask(__name__, template_folder='templates')
 def set_tenant_context():
     cc = request.headers.get('X-Client-Code', 'DEFAULT')
     client_ctx.set(cc)
+    
+    if request.path.startswith('/api/admin') or request.path.startswith('/admin'):
+        return
+        
+    cfg = load_client_config()
+    if cfg and not cfg.get('is_active', True):
+        return jsonify({"status": "error", "message": "Subscription Deactivated"}), 403
 
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "trade_hub_pro_secret_key_998877")
 

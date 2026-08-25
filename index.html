@@ -701,7 +701,7 @@
         <main class="flex-1 flex flex-col h-screen overflow-hidden">
             
             <!-- Top App Bar -->
-            <header class="h-16 px-margin-edge border-b border-outline-variant/20 bg-surface-container-low flex justify-between items-center shrink-0">
+            <header class="py-2 min-h-[4rem] px-margin-edge border-b border-outline-variant/20 bg-surface-container-low flex flex-wrap md:flex-nowrap justify-between items-center gap-2 shrink-0">
                 <!-- Top Left: Heading details -->
                 <div class="flex items-center gap-2 md:gap-4">
                     <button class="md:hidden text-on-surface" onclick="toggleSidebar()">
@@ -817,7 +817,7 @@
                     <!-- Toolbar header actions -->
                     <div class="flex flex-col xl:flex-row justify-between items-center gap-4 bg-surface-container-low/40 p-4 rounded-lg border border-outline-variant/20">
                         <!-- Exchange Segments switcher tabs -->
-                        <div class="flex gap-1.5 p-1 bg-surface-container rounded-lg border border-outline-variant/20">
+                        <div class="flex gap-1.5 p-1 bg-surface-container rounded-lg border border-outline-variant/20 w-full overflow-x-auto justify-start sm:justify-center shrink-0">
                             <button id="tab-nfo" onclick="switchSegment('NFO')" class="px-4 py-1.5 rounded font-display font-bold text-[10px] uppercase text-on-surface bg-primary/15 border border-primary/20">NFO (Index & Stock)</button>
                             <button id="tab-mcx" onclick="switchSegment('MCX')" class="px-4 py-1.5 rounded font-display font-bold text-[10px] uppercase text-on-surface-variant hover:text-on-surface transition-colors">MCX (Commodity)</button>
                         </div>
@@ -831,7 +831,7 @@
                         </div>
                         
                         <!-- Add Strategy trigger -->
-                        <div class="flex flex-wrap justify-center gap-2">
+                        <div class="flex flex-wrap justify-center gap-2 w-full xl:w-auto">
                             <button onclick="importAllPositionsFromBroker(this)" class="px-5 py-2 bg-secondary text-white font-display font-bold text-[10px] rounded-lg shadow-lg shadow-secondary/10 hover:bg-secondary/90 flex items-center gap-1.5 transition-all" title="Import/sync all open broker positions as strategy spreads">
                                 <span class="material-symbols-outlined text-sm">download</span>
                                 IMPORT FROM BROKER
@@ -1009,7 +1009,7 @@
 
             <!-- Sticky Bottom Engine Console Log Footer -->
             <footer class="h-32 bg-black border-t border-outline-variant/30 flex flex-col font-mono text-[11px] shrink-0 z-40 select-none">
-                <div class="px-4 py-2 border-b border-outline-variant/20 flex justify-between items-center bg-surface-container-lowest shrink-0">
+                <div class="px-4 py-2 border-b border-outline-variant/20 flex flex-col sm:flex-row gap-2 justify-between items-start sm:items-center bg-surface-container-lowest shrink-0">
                     <div class="flex items-center gap-3">
                         <span class="material-symbols-outlined text-primary text-sm">terminal</span>
                         <span class="font-display font-bold text-[9px] text-on-surface-variant uppercase tracking-wider">Trading Engine Telemetry Logs</span>
@@ -1665,7 +1665,13 @@
             }
             
             try {
-                return await fetch(url, options);
+                const res = await fetch(url, options);
+                if (res.status === 403) {
+                    alert("SUBSCRIPTION INACTIVE: Your ID has been deactivated by the Admin. Please contact support.");
+                    localStorage.removeItem('th_client_code');
+                    location.reload();
+                }
+                return res;
             } catch (err) {
                 // If fetch failed (stale/expired tunnel URL in normal browser cache), auto-discover latest tunnel and retry
                 console.warn("apiFetch failed on URL:", url, "Attempting auto-tunnel refresh...");
